@@ -30,9 +30,12 @@ export async function buildApp(): Promise<FastifyInstance> {
     await app.register(cors, {
         origin: [
             'http://localhost:3000',    // Next.js dev server
+            'http://localhost:5500',    // Test frontend (npx serve)
+            'http://localhost:5173',    // Vite dev server
+            'http://127.0.0.1:5500',
             frontendUrl,                // prod domain
         ],
-        methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
+        methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
         allowedHeaders: ['Authorization', 'Content-Type'],
         credentials: true,
     });

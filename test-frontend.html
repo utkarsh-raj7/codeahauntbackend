@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CloudLab — Test Console</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #0a0e1a;
+            --bg-card: #111827;
+            --bg-hover: #1a2332;
+            --border: #1e293b;
+            --text: #e2e8f0;
+            --text-dim: #94a3b8;
+            --accent: #6366f1;
+            --accent-glow: rgba(99, 102, 241, 0.15);
+            --green: #22c55e;
+            --green-dim: rgba(34, 197, 94, 0.15);
+            --amber: #f59e0b;
+            --amber-dim: rgba(245, 158, 11, 0.15);
+            --red: #ef4444;
+            --red-dim: rgba(239, 68, 68, 0.15);
+            --blue: #3b82f6;
+            --radius: 12px;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Inter', -apple-system, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+        }
+
+        /* Header */
+        .header {
+            background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%);
+            border-bottom: 1px solid var(--border);
+            padding: 16px 32px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            backdrop-filter: blur(20px);
+        }
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 20px;
+            font-weight: 700;
+        }
+        .logo span { color: var(--accent); }
+        .logo-icon {
+            width: 32px;
+            height: 32px;
+            background: linear-gradient(135deg, var(--accent), #8b5cf6);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+        }
+        .auth-section {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .user-badge {
+            padding: 6px 14px;
+            background: var(--green-dim);
+            color: var(--green);
+            border-radius: 20px;
+            font-size: 13px;
+            font-weight: 500;
+            display: none;
+        }
+
+        /* Main layout */
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 32px 24px;
+        }
+
+        /* Tabs */
+        .tabs {
+            display: flex;
+            gap: 4px;
+            background: var(--bg-card);
+            border-radius: 10px;
+            padding: 4px;
+            margin-bottom: 28px;
+            border: 1px solid var(--border);
+        }
+        .tab {
+            flex: 1;
+            padding: 10px 16px;
+            text-align: center;
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--text-dim);
+            background: none;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .tab:hover { color: var(--text); background: var(--bg-hover); }
+        .tab.active {
+            background: var(--accent);
+            color: white;
+            box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3);
+        }
+
+        /* Panels */
+        .panel { display: none; }
+        .panel.active { display: block; }
+
+        /* Login form */
+        .login-card {
+            max-width: 420px;
+            margin: 60px auto;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 32px;
+        }
+        .login-card h2 {
+            font-size: 22px;
+            margin-bottom: 4px;
+        }
+        .login-card p {
+            color: var(--text-dim);
+            font-size: 14px;
+            margin-bottom: 24px;
+        }
+        .form-group {
+            margin-bottom: 16px;
+        }
+        .form-group label {
+            display: block;
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-dim);
+            margin-bottom: 6px;
+        }
+        input[type="email"], input[type="password"] {
+            width: 100%;
+            padding: 10px 14px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text);
+            font-size: 14px;
+            font-family: inherit;
+            outline: none;
+            transition: border 0.2s;
+        }
+        input:focus { border-color: var(--accent); }
+
+        /* Buttons */
+        .btn {
+            padding: 10px 20px;
+            border-radius: 8px;
+            border: none;
+            font-size: 14px;
+            font-weight: 500;
+            font-family: inherit;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .btn-primary {
+            background: var(--accent);
+            color: white;
+            width: 100%;
+            justify-content: center;
+        }
+        .btn-primary:hover { background: #5558e6; transform: translateY(-1px); }
+        .btn-sm {
+            padding: 6px 14px;
+            font-size: 13px;
+        }
+        .btn-green { background: var(--green-dim); color: var(--green); }
+        .btn-green:hover { background: rgba(34, 197, 94, 0.25); }
+        .btn-red { background: var(--red-dim); color: var(--red); }
+        .btn-red:hover { background: rgba(239, 68, 68, 0.25); }
+        .btn-blue { background: rgba(59, 130, 246, 0.15); color: var(--blue); }
+        .btn-blue:hover { background: rgba(59, 130, 246, 0.25); }
+
+        /* Lab grid */
+        .lab-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+            gap: 20px;
+        }
+        .lab-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 24px;
+            transition: all 0.3s;
+            position: relative;
+            overflow: hidden;
+        }
+        .lab-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, var(--accent), #8b5cf6);
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        .lab-card:hover {
+            border-color: var(--accent);
+            transform: translateY(-2px);
+            box-shadow: 0 8px 32px rgba(99, 102, 241, 0.1);
+        }
+        .lab-card:hover::before { opacity: 1; }
+        .lab-title {
+            font-size: 17px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+        .lab-desc {
+            color: var(--text-dim);
+            font-size: 14px;
+            line-height: 1.5;
+            margin-bottom: 16px;
+        }
+        .lab-meta {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            margin-bottom: 16px;
+        }
+        .badge {
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        .badge-difficulty {
+            background: var(--amber-dim);
+            color: var(--amber);
+        }
+        .badge-category {
+            background: var(--accent-glow);
+            color: var(--accent);
+        }
+        .badge-time {
+            background: rgba(59, 130, 246, 0.15);
+            color: var(--blue);
+        }
+
+        /* Session cards */
+        .session-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 20px;
+            margin-bottom: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .session-info h4 {
+            font-size: 15px;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+        .session-info p {
+            color: var(--text-dim);
+            font-size: 13px;
+        }
+        .session-actions {
+            display: flex;
+            gap: 8px;
+        }
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 6px;
+        }
+        .status-ready { background: var(--green); box-shadow: 0 0 8px var(--green); }
+        .status-provisioning { background: var(--amber); animation: pulse 1.5s infinite; }
+        .status-destroyed { background: var(--red); }
+        .status-error { background: var(--red); }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+
+        /* Log console */
+        .log-console {
+            background: #0d1117;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 16px;
+            margin-top: 20px;
+            max-height: 300px;
+            overflow-y: auto;
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            font-size: 13px;
+            line-height: 1.6;
+        }
+        .log-entry { margin-bottom: 2px; }
+        .log-time { color: var(--text-dim); }
+        .log-ok { color: var(--green); }
+        .log-error { color: var(--red); }
+        .log-info { color: var(--blue); }
+        .log-warn { color: var(--amber); }
+
+        /* Empty state */
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--text-dim);
+        }
+        .empty-state h3 {
+            font-size: 18px;
+            margin-bottom: 8px;
+            color: var(--text);
+        }
+
+        /* Section header */
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        .section-header h2 {
+            font-size: 20px;
+            font-weight: 600;
+        }
+        .section-header span {
+            color: var(--text-dim);
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <div class="header">
+        <div class="logo">
+            <div class="logo-icon">⚡</div>
+            Cloud<span>Lab</span>
+            <span style="font-size:12px;color:var(--text-dim);font-weight:400;margin-left:8px">Test Console</span>
+        </div>
+        <div class="auth-section">
+            <div class="user-badge" id="userBadge"></div>
+            <button class="btn btn-sm btn-red" id="logoutBtn" style="display:none" onclick="logout()">Logout</button>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- Tabs -->
+        <div class="tabs">
+            <button class="tab active" onclick="switchTab('catalog')">🧪 Lab Catalog</button>
+            <button class="tab" onclick="switchTab('sessions')">📡 My Sessions</button>
+            <button class="tab" onclick="switchTab('schedule')">📅 Schedule</button>
+            <button class="tab" onclick="switchTab('console')">🖥️ Console</button>
+        </div>
+
+        <!-- Login Panel (shown when not authed) -->
+        <div id="loginPanel">
+            <div class="login-card">
+                <h2>Sign In</h2>
+                <p>Use seed credentials to test the API</p>
+                <div class="form-group">
+                    <label>Email</label>
+                    <input type="email" id="emailInput" value="seed-user@example.com" />
+                </div>
+                <div class="form-group">
+                    <label>Password</label>
+                    <input type="password" id="passInput" value="password123" />
+                </div>
+                <button class="btn btn-primary" onclick="login()">Sign In →</button>
+            </div>
+        </div>
+
+        <!-- Catalog -->
+        <div class="panel" id="catalogPanel">
+            <div class="section-header">
+                <h2>Available Labs</h2>
+                <span id="labCount"></span>
+            </div>
+            <div class="lab-grid" id="labGrid"></div>
+        </div>
+
+        <!-- Sessions -->
+        <div class="panel" id="sessionsPanel">
+            <div class="section-header">
+                <h2>Active Sessions</h2>
+                <button class="btn btn-sm btn-blue" onclick="loadSessions()">↻ Refresh</button>
+            </div>
+            <div id="sessionsList"></div>
+        </div>
+
+        <!-- Schedule -->
+        <div class="panel" id="schedulePanel">
+            <div class="section-header">
+                <h2>My Bookings</h2>
+                <button class="btn btn-sm btn-blue" onclick="loadBookings()">↻ Refresh</button>
+            </div>
+            <div id="bookingsList"></div>
+        </div>
+
+        <!-- Console -->
+        <div class="panel" id="consolePanel">
+            <div class="section-header">
+                <h2>API Console</h2>
+                <button class="btn btn-sm btn-red" onclick="clearLog()">Clear</button>
+            </div>
+            <div class="log-console" id="logConsole">
+                <div class="log-entry"><span class="log-info">Ready. Sign in to start testing.</span></div>
+            </div>
+        </div>
+    </div>
+
+<script>
+const API = 'http://localhost:3001/api/v1';
+let token = null;
+let currentTab = 'catalog';
+
+// ─── Logging ────────────────────────────────
+function log(msg, type = 'info') {
+    const el = document.getElementById('logConsole');
+    const time = new Date().toLocaleTimeString();
+    const cls = { ok: 'log-ok', error: 'log-error', info: 'log-info', warn: 'log-warn' };
+    el.innerHTML += `<div class="log-entry"><span class="log-time">${time}</span> <span class="${cls[type] || ''}">${msg}</span></div>`;
+    el.scrollTop = el.scrollHeight;
+}
+
+function clearLog() {
+    document.getElementById('logConsole').innerHTML = '';
+    log('Console cleared', 'info');
+}
+
+// ─── API helper ─────────────────────────────
+async function api(method, path, body = null) {
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    const opts = { method, headers };
+    if (body) opts.body = JSON.stringify(body);
+
+    log(`${method} ${path}`, 'info');
+    try {
+        const res = await fetch(`${API}${path}`, opts);
+        const data = await res.json();
+        if (res.ok) {
+            log(`← ${res.status} ${JSON.stringify(data).substring(0, 120)}`, 'ok');
+        } else {
+            log(`← ${res.status} ${data.message || JSON.stringify(data)}`, 'error');
+        }
+        return { ok: res.ok, status: res.status, data };
+    } catch (e) {
+        log(`← NETWORK ERROR: ${e.message}`, 'error');
+        return { ok: false, data: null };
+    }
+}
+
+// ─── Auth ───────────────────────────────────
+async function login() {
+    const email = document.getElementById('emailInput').value;
+    const pass = document.getElementById('passInput').value;
+    const res = await api('POST', '/auth/login', { email, password: pass });
+    if (res.ok) {
+        token = res.data.access_token;
+        document.getElementById('loginPanel').style.display = 'none';
+        document.getElementById('userBadge').style.display = 'block';
+        document.getElementById('userBadge').textContent = `● ${email}`;
+        document.getElementById('logoutBtn').style.display = 'block';
+        switchTab('catalog');
+        loadCatalog();
+    }
+}
+
+function logout() {
+    token = null;
+    document.getElementById('loginPanel').style.display = 'block';
+    document.getElementById('userBadge').style.display = 'none';
+    document.getElementById('logoutBtn').style.display = 'none';
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    log('Logged out', 'warn');
+}
+
+// ─── Tabs ───────────────────────────────────
+function switchTab(name) {
+    if (!token && name !== 'console') return;
+    currentTab = name;
+    document.querySelectorAll('.tab').forEach((t, i) => {
+        t.classList.toggle('active', ['catalog','sessions','schedule','console'][i] === name);
+    });
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    document.getElementById(name + 'Panel').classList.add('active');
+
+    if (name === 'catalog') loadCatalog();
+    if (name === 'sessions') loadSessions();
+    if (name === 'schedule') loadBookings();
+}
+
+// ─── Catalog ────────────────────────────────
+async function loadCatalog() {
+    const res = await api('GET', '/catalog/labs');
+    if (!res.ok) return;
+    const labs = res.data;
+    document.getElementById('labCount').textContent = `${labs.length} labs`;
+
+    document.getElementById('labGrid').innerHTML = labs.map(lab => `
+        <div class="lab-card">
+            <div class="lab-title">${lab.title || lab.id}</div>
+            <div class="lab-desc">${lab.description || 'No description'}</div>
+            <div class="lab-meta">
+                <span class="badge badge-difficulty">${lab.difficulty}</span>
+                <span class="badge badge-category">${lab.category}</span>
+                <span class="badge badge-time">⏱ ${lab.estimatedMinutes || lab.estimated_minutes || 30} min</span>
+            </div>
+            <button class="btn btn-sm btn-green" onclick="provision('${lab.id}')">▶ Launch Lab</button>
+        </div>
+    `).join('');
+}
+
+// ─── Provision ──────────────────────────────
+async function provision(labId) {
+    const res = await api('POST', `/labs/${labId}/provision`, {});
+    if (res.ok) {
+        log(`Session created: ${res.data.id}`, 'ok');
+        switchTab('sessions');
+    }
+}
+
+// ─── Sessions ───────────────────────────────
+async function loadSessions() {
+    const res = await api('GET', '/labs/sessions');
+    if (!res.ok) return;
+    const sess = res.data;
+
+    if (!sess.length) {
+        document.getElementById('sessionsList').innerHTML = `
+            <div class="empty-state">
+                <h3>No active sessions</h3>
+                <p>Go to Lab Catalog and launch a lab to get started</p>
+            </div>`;
+        return;
+    }
+
+    document.getElementById('sessionsList').innerHTML = sess.map(s => `
+        <div class="session-card">
+            <div class="session-info">
+                <h4><span class="status-dot status-${s.status}"></span>${s.labId || s.lab_id}</h4>
+                <p>ID: ${s.id.substring(0, 8)}… · Status: ${s.status} · TTL: ${s.ttlSeconds || s.ttl_seconds}s</p>
+                ${s.terminalUrl || s.terminal_url ? `<p style="color:var(--green);margin-top:4px">🔗 ${s.terminalUrl || s.terminal_url}</p>` : ''}
+            </div>
+            <div class="session-actions">
+                <button class="btn btn-sm btn-blue" onclick="heartbeat('${s.id}')">💓 Heartbeat</button>
+                <button class="btn btn-sm btn-green" onclick="checkStatus('${s.id}')">📊 Status</button>
+                <button class="btn btn-sm btn-red" onclick="destroySession('${s.id}')">🗑 Destroy</button>
+            </div>
+        </div>
+    `).join('');
+}
+
+async function heartbeat(sid) {
+    await api('POST', `/labs/${sid}/heartbeat`);
+}
+
+async function checkStatus(sid) {
+    await api('GET', `/labs/${sid}/status`);
+}
+
+async function destroySession(sid) {
+    const res = await api('DELETE', `/labs/${sid}`);
+    if (res.ok) {
+        log(`Session ${sid.substring(0,8)}… destroyed`, 'ok');
+        loadSessions();
+    }
+}
+
+// ─── Schedule ───────────────────────────────
+async function loadBookings() {
+    const res = await api('GET', '/schedule/my-bookings');
+    if (!res.ok) return;
+    const bookings = res.data;
+
+    if (!bookings.length) {
+        document.getElementById('bookingsList').innerHTML = `
+            <div class="empty-state">
+                <h3>No bookings yet</h3>
+                <p>Schedule a lab from the catalog for a future time</p>
+            </div>`;
+        return;
+    }
+
+    document.getElementById('bookingsList').innerHTML = bookings.map(b => `
+        <div class="session-card">
+            <div class="session-info">
+                <h4>${b.labId || b.lab_id}</h4>
+                <p>Scheduled: ${new Date(b.scheduledAt).toLocaleString()} · Status: ${b.status}</p>
+            </div>
+            <div class="session-actions">
+                <button class="btn btn-sm btn-red" onclick="cancelBooking('${b.id}')">Cancel</button>
+            </div>
+        </div>
+    `).join('');
+}
+
+async function cancelBooking(id) {
+    await api('DELETE', `/schedule/${id}`);
+    loadBookings();
+}
+</script>
+</body>
+</html>
