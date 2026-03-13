@@ -1,7 +1,7 @@
 FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
 ENV MYSQL_ROOT_PASSWORD=labpass
-RUN apt-get update && apt-get install -y mysql-server nano \
+RUN apt-get update && apt-get install -y curl mysql-server nano \
     && rm -rf /var/lib/apt/lists/*
 RUN curl -fsSL https://github.com/tsl0922/ttyd/releases/download/1.7.4/ttyd.aarch64 \
     -o /usr/local/bin/ttyd && chmod +x /usr/local/bin/ttyd
