@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lab Terminal — Test</title>
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            background: #0f1117;
+            color: #e1e4e8;
+            min-height: 100vh;
+        }
+
+        .top-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 24px;
+            background: #161b22;
+            border-bottom: 1px solid #30363d;
+        }
+
+        .top-bar h1 {
+            font-size: 16px;
+            font-weight: 600;
+            color: #58a6ff;
+        }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .status-badge.idle { background: #30363d; color: #8b949e; }
+        .status-badge.provisioning { background: #1c2333; color: #d29922; }
+        .status-badge.ready { background: #0d2117; color: #3fb950; }
+        .status-badge.error { background: #2d1216; color: #f85149; }
+
+        .status-badge::before {
+            content: '';
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: currentColor;
+        }
+        .status-badge.provisioning::before {
+            animation: pulse 1s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+
+        .controls {
+            display: flex;
+            gap: 8px;
+            padding: 12px 24px;
+            background: #161b22;
+            border-bottom: 1px solid #30363d;
+        }
+
+        button {
+            padding: 8px 16px;
+            border-radius: 6px;
+            border: 1px solid #30363d;
+            background: #21262d;
+            color: #c9d1d9;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        button:hover { background: #30363d; border-color: #58a6ff; }
+        button:disabled { opacity: 0.4; cursor: not-allowed; }
+        button.primary { background: #238636; border-color: #238636; color: #fff; }
+        button.primary:hover { background: #2ea043; }
+        button.danger { background: #da3633; border-color: #da3633; color: #fff; }
+        button.danger:hover { background: #f85149; }
+
+        select {
+            padding: 8px 12px;
+            border-radius: 6px;
+            border: 1px solid #30363d;
+            background: #0d1117;
+            color: #c9d1d9;
+            font-size: 13px;
+        }
+
+        .terminal-frame {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .terminal-frame iframe {
+            flex: 1;
+            width: 100%;
+            height: calc(100vh - 110px);
+            border: none;
+            background: #000;
+        }
+
+        .terminal-placeholder {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            gap: 16px;
+            height: calc(100vh - 110px);
+            color: #484f58;
+        }
+        .terminal-placeholder svg { width: 64px; height: 64px; opacity: 0.3; }
+        .terminal-placeholder p { font-size: 14px; }
+
+        .log-bar {
+            padding: 8px 24px;
+            background: #0d1117;
+            border-top: 1px solid #30363d;
+            font-size: 11px;
+            color: #484f58;
+            font-family: 'SF Mono', 'Cascadia Code', monospace;
+            max-height: 60px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="top-bar">
+        <h1>☁ CloudLab Terminal</h1>
+        <span id="status" class="status-badge idle">idle</span>
+    </div>
+
+    <div class="controls">
+        <select id="labSelect">
+            <option value="k8s-basics-01">Kubernetes Basics</option>
+            <option value="linux-basics-01">Linux Fundamentals</option>
+        </select>
+        <button id="provisionBtn" class="primary" onclick="provision()">▶ Launch Lab</button>
+        <button id="heartbeatBtn" disabled onclick="heartbeat()">♥ Heartbeat</button>
+        <button id="destroyBtn" class="danger" disabled onclick="destroy()">✕ Destroy</button>
+    </div>
+
+    <div class="terminal-frame">
+        <div id="placeholder" class="terminal-placeholder">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <rect x="2" y="3" width="20" height="18" rx="2"/>
+                <path d="M7 8l4 4-4 4M13 16h4"/>
+            </svg>
+            <p>Select a lab and click <strong>Launch Lab</strong> to start</p>
+        </div>
+        <iframe id="terminal" style="display:none"></iframe>
+    </div>
+
+    <div class="log-bar" id="log"></div>
+
+    <script>
+        const API = 'http://localhost:3001/api/v1';
+        let token = null;
+        let sessionId = null;
+        let pollTimer = null;
+
+        function log(msg) {
+            const el = document.getElementById('log');
+            const ts = new Date().toLocaleTimeString();
+            el.textContent = `[${ts}] ${msg}`;
+        }
+
+        function setStatus(status) {
+            const el = document.getElementById('status');
+            el.className = `status-badge ${status}`;
+            el.textContent = status;
+        }
+
+        async function login() {
+            log('Logging in...');
+            const res = await fetch(`${API}/auth/login`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email: 'seed-user@example.com', password: 'password123' })
+            });
+            const data = await res.json();
+            token = data.access_token;
+            log('✅ Logged in');
+            return token;
+        }
+
+        async function provision() {
+            if (!token) await login();
+
+            const labId = document.getElementById('labSelect').value;
+            document.getElementById('provisionBtn').disabled = true;
+            setStatus('provisioning');
+            log(`Provisioning ${labId}...`);
+
+            try {
+                const res = await fetch(`${API}/labs/${labId}/provision`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: '{}'
+                });
+                const data = await res.json();
+                sessionId = data.session_id || data.id;
+                log(`Session created: ${sessionId?.slice(0, 8)}... polling for ready`);
+
+                // Poll for ready
+                pollTimer = setInterval(pollStatus, 3000);
+            } catch (err) {
+                setStatus('error');
+                log(`❌ Provision failed: ${err.message}`);
+                document.getElementById('provisionBtn').disabled = false;
+            }
+        }
+
+        async function pollStatus() {
+            if (!sessionId) return;
+
+            try {
+                const res = await fetch(`${API}/labs/${sessionId}/status`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                const data = await res.json();
+                log(`Status: ${data.status}${data.terminal_url ? ' — terminal ready' : ''}`);
+
+                if (data.status === 'ready' && data.terminal_url) {
+                    clearInterval(pollTimer);
+                    setStatus('ready');
+                    showTerminal(data.terminal_url);
+                    document.getElementById('heartbeatBtn').disabled = false;
+                    document.getElementById('destroyBtn').disabled = false;
+                } else if (data.status === 'error') {
+                    clearInterval(pollTimer);
+                    setStatus('error');
+                    log(`❌ Error: ${data.error_message || 'Unknown error'}`);
+                    document.getElementById('provisionBtn').disabled = false;
+                }
+            } catch (err) {
+                log(`Poll error: ${err.message}`);
+            }
+        }
+
+        function showTerminal(url) {
+            document.getElementById('placeholder').style.display = 'none';
+            const iframe = document.getElementById('terminal');
+            iframe.style.display = 'block';
+            iframe.src = url;
+            log(`✅ Terminal loaded: ${url}`);
+        }
+
+        async function heartbeat() {
+            try {
+                const res = await fetch(`${API}/labs/${sessionId}/heartbeat`, {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                const data = await res.json();
+                log(`♥ Heartbeat — ${data.time_remaining_seconds}s remaining`);
+            } catch (err) {
+                log(`Heartbeat error: ${err.message}`);
+            }
+        }
+
+        async function destroy() {
+            if (!sessionId) return;
+            document.getElementById('destroyBtn').disabled = true;
+
+            try {
+                await fetch(`${API}/labs/${sessionId}`, {
+                    method: 'DELETE',
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                setStatus('idle');
+                document.getElementById('terminal').style.display = 'none';
+                document.getElementById('placeholder').style.display = 'flex';
+                document.getElementById('provisionBtn').disabled = false;
+                document.getElementById('heartbeatBtn').disabled = false;
+                sessionId = null;
+                log('✕ Lab destroyed');
+            } catch (err) {
+                log(`Destroy error: ${err.message}`);
+            }
+        }
+    </script>
+</body>
+</html>

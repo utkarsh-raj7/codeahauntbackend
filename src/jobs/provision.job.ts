@@ -42,8 +42,19 @@ export const provisionWorker = new Worker('provision', async (job: Job) => {
         // Real embed token via authService
         const embedToken = await authService.issueEmbedToken(sessionId, userId);
 
-        const baseDomain = process.env.BASE_DOMAIN || 'labs.yourdomain.com';
-        const terminal_url = `https://${sessionId}.${baseDomain}/terminal?token=${embedToken}`;
+        let terminal_url: string;
+        const isDev = process.env.NODE_ENV !== 'production';
+
+        if (isDev) {
+            // In dev, resolve the host port Docker assigned to ttyd
+            const inspectData = await containerService.inspectContainer(containerId);
+            const portKey = `${exposePort || 7681}/tcp`;
+            const hostPort = inspectData.ports?.[portKey]?.[0]?.HostPort || '7681';
+            terminal_url = `http://localhost:${hostPort}`;
+        } else {
+            const baseDomain = process.env.BASE_DOMAIN || 'labs.yourdomain.com';
+            terminal_url = `https://${sessionId}.${baseDomain}/terminal?token=${embedToken}`;
+        }
 
         await db.update(sessions)
             .set({

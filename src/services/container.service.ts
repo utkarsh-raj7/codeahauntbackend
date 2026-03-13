@@ -42,11 +42,15 @@ export class ContainerService {
             const container = await docker.createContainer({
                 Image: config.image,
                 name: `lab-${config.sessionId}`,
+                ExposedPorts: { [`${exposePort}/tcp`]: {} },
                 HostConfig: {
                     NanoCpus: cpuLimit,
                     Memory: memoryLimit,
                     NetworkMode: networkMode,
                     SecurityOpt: ['no-new-privileges:true'],
+                    PortBindings: {
+                        [`${exposePort}/tcp`]: [{ HostPort: '0' }]  // random host port
+                    },
                 },
                 Labels: {
                     'com.labsystem': 'true',
@@ -105,7 +109,8 @@ export class ContainerService {
             return {
                 running: data.State.Running,
                 ip: Object.values(data.NetworkSettings?.Networks || {})[0]?.IPAddress || '',
-                exitCode: data.State.ExitCode
+                exitCode: data.State.ExitCode,
+                ports: data.NetworkSettings?.Ports || {},
             };
         } catch (err: any) {
             throw new AppError('CONTAINER_ERROR', `Failed to inspect container: ${err.message}`, 500);
