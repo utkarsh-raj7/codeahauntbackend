@@ -1,7 +1,7 @@
 import { FastifyRequest } from 'fastify';
 import { db } from '../config/database';
 import { sessions } from '../db/schema/sessions';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, notInArray, desc } from 'drizzle-orm';
 import { containerService } from './container.service';
 import { AppError } from '../types';
 import { Queue } from 'bullmq';
@@ -12,6 +12,8 @@ import { randomUUID } from 'crypto';
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 export const provisionQueue = new Queue('provision', { connection: { url: REDIS_URL } });
 
+const KEEP_RECENT = parseInt(process.env.KEEP_RECENT_SESSIONS || '3', 10);
+
 export class OrchestratorService {
     async provisionLab(req: FastifyRequest | any, labId: string, options: any = {}) {
         const userId = req.user?.sub || req.userId; // Support both forms
@@ -20,6 +22,11 @@ export class OrchestratorService {
         const MAX_ACTIVE = parseInt(process.env.MAX_ACTIVE_SESSIONS_PER_USER || '100', 10);
         const MAX_TOTAL = parseInt(process.env.MAX_TOTAL_ACTIVE_CONTAINERS || '500', 10);
         const DEFAULT_TTL = parseInt(process.env.DEFAULT_SESSION_TTL || '3600', 10);
+
+        // 0. Prune old sessions first (keeps KEEP_RECENT, frees quota)
+        await this.pruneOldSessions(userId).catch(err =>
+            console.warn('[auto-prune] Non-blocking prune error:', err.message)
+        );
 
         // 1. Quota check specific user
         const userSessions = await db.select().from(sessions).where(
@@ -79,6 +86,46 @@ export class OrchestratorService {
         };
     }
 
+    /**
+     * Auto-prune: keep only the N most recent sessions per user.
+     * Older containers are stopped, removed, and marked 'destroyed'.
+     * Runs in a non-blocking fashion so new provisions are never delayed.
+     */
+    async pruneOldSessions(userId: string) {
+        const activeSessions = await db.select().from(sessions).where(
+            and(
+                eq(sessions.userId, userId),
+                notInArray(sessions.status, ['destroyed', 'expired'])
+            )
+        );
+
+        if (activeSessions.length <= KEEP_RECENT) return; // nothing to prune
+
+        // Sort newest-first by createdAt
+        activeSessions.sort((a, b) =>
+            new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        );
+
+        const toPrune = activeSessions.slice(KEEP_RECENT);
+        console.log(`[auto-prune] User ${userId.slice(0, 8)}: pruning ${toPrune.length} old session(s), keeping ${KEEP_RECENT}`);
+
+        for (const session of toPrune) {
+            try {
+                if (session.containerId) {
+                    await containerService.stopContainer(session.containerId).catch(() => { });
+                    await containerService.removeContainer(session.containerId).catch(() => { });
+                }
+                await redisClient.del(`sess:${session.id}`);
+                await db.update(sessions)
+                    .set({ status: 'destroyed', endedAt: new Date() })
+                    .where(eq(sessions.id, session.id));
+                console.log(`[auto-prune] Destroyed session ${session.id.slice(0, 8)} (lab: ${session.labId})`);
+            } catch (err: any) {
+                console.warn(`[auto-prune] Failed to prune ${session.id.slice(0, 8)}:`, err.message);
+            }
+        }
+    }
+
     async destroyLab(sessionId: string) {
         const sessionRecord = await db.select().from(sessions).where(eq(sessions.id, sessionId));
         if (!sessionRecord || sessionRecord.length === 0) {
@@ -124,3 +171,4 @@ export class OrchestratorService {
 }
 
 export const orchestrator = new OrchestratorService();
+
