@@ -12,9 +12,9 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install ttyd
-RUN wget https://github.com/tsl0922/ttyd/releases/download/1.7.4/ttyd.x86_64 \
-    && chmod +x ttyd.x86_64 \
-    && mv ttyd.x86_64 /usr/local/bin/ttyd
+RUN wget https://github.com/tsl0922/ttyd/releases/download/1.7.4/ttyd.aarch64 \
+    && chmod +x ttyd.aarch64 \
+    && mv ttyd.aarch64 /usr/local/bin/ttyd
 
 # Create non-root user
 RUN useradd -m -u 1000 labuser

@@ -7,7 +7,7 @@ RUN curl -fsSL "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release
     -o /usr/local/bin/kubectl && chmod +x /usr/local/bin/kubectl
 # k3s for local cluster
 RUN curl -fsSL https://get.k3s.io | sh -s - --write-kubeconfig-mode 644 || true
-RUN curl -fsSL https://github.com/tsl0922/ttyd/releases/download/1.7.4/ttyd.x86_64 \
+RUN curl -fsSL https://github.com/tsl0922/ttyd/releases/download/1.7.4/ttyd.aarch64 \
     -o /usr/local/bin/ttyd && chmod +x /usr/local/bin/ttyd
 RUN useradd -m -u 1000 -s /bin/bash labuser \
     && echo "labuser ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers

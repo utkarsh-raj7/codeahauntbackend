@@ -5,7 +5,7 @@ RUN apt-get update && apt-get install -y gnupg curl nano \
     && echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg ] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/7.0 multiverse" > /etc/apt/sources.list.d/mongodb-org-7.0.list \
     && apt-get update && apt-get install -y mongodb-org \
     && rm -rf /var/lib/apt/lists/*
-RUN curl -fsSL https://github.com/tsl0922/ttyd/releases/download/1.7.4/ttyd.x86_64 \
+RUN curl -fsSL https://github.com/tsl0922/ttyd/releases/download/1.7.4/ttyd.aarch64 \
     -o /usr/local/bin/ttyd && chmod +x /usr/local/bin/ttyd
 RUN useradd -m -u 1000 -s /bin/bash labuser \
     && mkdir -p /data/db && chown labuser:labuser /data/db
