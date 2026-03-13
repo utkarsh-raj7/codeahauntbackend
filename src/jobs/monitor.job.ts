@@ -26,4 +26,4 @@ export const monitorWorker = new Worker('monitor', async (job: Job) => {
             console.error(`Monitor failed for session ${session.id}:`, err);
         }
     }
-}, { connection: new URL(REDIS_URL) });
+}, { connection: { url: REDIS_URL } });

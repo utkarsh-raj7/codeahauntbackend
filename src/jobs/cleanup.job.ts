@@ -26,4 +26,4 @@ export const cleanupWorker = new Worker('cleanup', async (job: Job) => {
             console.error(`Failed to cleanup session ${session.id}:`, err);
         }
     }
-}, { connection: new URL(REDIS_URL) });
+}, { connection: { url: REDIS_URL } });

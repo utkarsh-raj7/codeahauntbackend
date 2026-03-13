@@ -1,8 +1,11 @@
 import { FastifyInstance } from 'fastify';
 import { adminAuth } from '../config/firebase-admin';
 import * as jwt from 'jsonwebtoken';
+import { sessionService } from '../services/session.service';
+import { redisClient } from '../config/redis';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-256-bit-secret-here';
+const TIME_WARNING_THRESHOLD = 300; // 5 minutes in seconds
 
 export async function setupWebSocketGateway(app: FastifyInstance) {
     app.get('/ws/v1/labs/:sessionId/events', { websocket: true }, async (con, req) => {
@@ -46,21 +49,65 @@ export async function setupWebSocketGateway(app: FastifyInstance) {
                 userId = decoded.sub as string;
             }
 
-            con.socket.send(JSON.stringify({ type: 'connected', time_remaining_seconds: 3600 }));
+            // Get initial TTL from Redis
+            const ttl = await redisClient.ttl(`sess:${sessionId}`);
+            const timeRemaining = ttl > 0 ? ttl : 3600;
 
-            con.socket.on('message', (message) => {
+            con.socket.send(JSON.stringify({
+                type: 'connected',
+                time_remaining_seconds: timeRemaining,
+                ts: Date.now(),
+            }));
+
+            // Time warning check interval — poll Redis TTL every 30s
+            const warningInterval = setInterval(async () => {
+                try {
+                    const currentTtl = await redisClient.ttl(`sess:${sessionId}`);
+                    if (currentTtl > 0 && currentTtl <= TIME_WARNING_THRESHOLD) {
+                        con.socket.send(JSON.stringify({
+                            type: 'time_warning',
+                            seconds_remaining: currentTtl,
+                            ts: Date.now(),
+                        }));
+                    }
+                    if (currentTtl <= 0) {
+                        con.socket.send(JSON.stringify({
+                            type: 'session_expired',
+                            ts: Date.now(),
+                        }));
+                        con.socket.close(1000, 'Session expired');
+                    }
+                } catch {
+                    // Redis unavailable — don't crash the WS
+                }
+            }, 30000);
+
+            // Message handler
+            con.socket.on('message', async (message: Buffer | string) => {
                 try {
                     const data = JSON.parse(message.toString());
                     if (data.type === 'heartbeat') {
-                        con.socket.send(JSON.stringify({ type: 'heartbeat_ack' }));
+                        // Real heartbeat — resets Redis TTL via sessionService
+                        const result = await sessionService.heartbeat(sessionId, userId!);
+                        con.socket.send(JSON.stringify({
+                            type: 'heartbeat_ack',
+                            time_remaining_seconds: result.time_remaining_seconds,
+                            ts: Date.now(),
+                        }));
                     }
-                } catch (e) {
-                    // ignore
+                } catch {
+                    // Ignore malformed messages
                 }
             });
 
-        } catch (err) {
+            // Cleanup on close
+            con.socket.on('close', () => {
+                clearInterval(warningInterval);
+            });
+
+        } catch {
             con.socket.close(1008, 'Invalid token');
         }
     });
 }
+

@@ -61,4 +61,4 @@ export const provisionWorker = new Worker('provision', async (job: Job) => {
 
         throw err;
     }
-}, { connection: new URL(REDIS_URL), concurrency: 5 });
+}, { connection: { url: REDIS_URL }, concurrency: 5 });
