@@ -1,0 +1,15 @@
+---
+- name: Basic Setup Playbook
+  hosts: localhost
+  connection: local
+  tasks:
+    - name: Create a directory
+      file:
+        path: /tmp/ansible-output
+        state: directory
+        mode: '0755'
+
+    # TODO: Add a task to create a file inside /tmp/ansible-output/
+    # with content "Ansible was here!"
+
+    # TODO: Add a task to install a package (use 'become: yes' for apt)

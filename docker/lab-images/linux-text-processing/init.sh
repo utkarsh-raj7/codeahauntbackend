@@ -1,5 +1,6 @@
 #!/bin/bash
 mkdir -p ~/data
+# Sample CSV for awk/cut exercises
 cat > ~/data/users.csv << 'CSV'
 id,name,role,score
 1,alice,admin,95
@@ -8,6 +9,7 @@ id,name,role,score
 4,dave,instructor,91
 5,eve,student,63
 CSV
+# Sample log for grep/sed exercises
 cat > ~/data/server.log << 'LOG'
 2026-03-01 10:00:01 INFO  Server started on port 3000
 2026-03-01 10:00:05 INFO  Database connected
