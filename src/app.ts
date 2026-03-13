@@ -11,6 +11,8 @@ import { setupErrorHandler } from './middleware/errorHandler';
 import authRoutes from './routes/auth.routes';
 import labsRoutes from './routes/labs.routes';
 import catalogRoutes from './routes/catalog.routes';
+import scheduleRoutes from './routes/schedule.routes';
+import adminRoutes from './routes/admin.routes';
 
 export async function buildApp(): Promise<FastifyInstance> {
     const app = Fastify({ logger: true });
@@ -21,6 +23,8 @@ export async function buildApp(): Promise<FastifyInstance> {
     await app.register(authRoutes, { prefix: '/api/v1/auth' });
     await app.register(labsRoutes, { prefix: '/api/v1/labs' });
     await app.register(catalogRoutes, { prefix: '/api/v1/catalog' });
+    await app.register(scheduleRoutes, { prefix: '/api/v1/schedule' });
+    await app.register(adminRoutes, { prefix: '/api/v1/admin' });
 
     // 1. Register plugins
     await app.register(cors, {

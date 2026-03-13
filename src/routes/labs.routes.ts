@@ -1,39 +1,55 @@
 import { FastifyPluginAsync } from 'fastify';
 import { authenticate } from '../middleware/authenticate';
+import { ownerGuard } from '../middleware/ownerGuard';
 import { db } from '../config/database';
 import { sessions } from '../db/schema/sessions';
 import { eq } from 'drizzle-orm';
+import { orchestrator } from '../services/orchestrator.service';
+import { sessionService } from '../services/session.service';
 
 const labsRoutes: FastifyPluginAsync = async (app) => {
-    app.addHook('preHandler', authenticate);
-
-    // Pre-Checkpoint 1 validation endpoint
-    app.get('/sessions', async (request, reply) => {
+    // 1. Get all sessions for current user (no ownerGuard needed, just authenticate)
+    app.get('/sessions', { preHandler: [authenticate] }, async (request, reply) => {
         const userId = request.user.sub as string;
         const userSessions = await db.select().from(sessions).where(eq(sessions.userId, userId));
         return reply.code(200).send(userSessions);
     });
 
-    // Existing DELETE logic for ending a session
-    app.delete('/:sessionId', async (request, reply) => {
-        const { sessionId } = request.params as { sessionId: string };
-        // orchestrator.destroyLab(sessionId)
-        return reply.code(200).send({ status: 'destroyed' });
+    // 2. Provision a new lab (no ownerGuard needed, just authenticate)
+    app.post('/:labId/provision', { preHandler: [authenticate] }, async (request, reply) => {
+        const { labId } = request.params as { labId: string };
+        const result = await orchestrator.provisionLab(request, labId);
+        return reply.code(200).send(result);
     });
 
-    // 6.8 Delta: POST /:sessionId/destroy is now required alongside DELETE (sendBeacon compat)
-    app.post('/:sessionId/destroy', async (request, reply) => {
+    // 3. Get session status
+    app.get('/:sessionId/status', { preHandler: [authenticate, ownerGuard] }, async (request, reply) => {
         const { sessionId } = request.params as { sessionId: string };
-        // Identical logic to DELETE /:sessionId but accepts text/plain body from navigator.sendBeacon
-        // orchestrator.destroyLab(sessionId)
-        return reply.code(200).send({ status: 'destroyed' });
+        const userId = request.user.sub as string;
+        const result = await orchestrator.getSessionStatus(sessionId, userId);
+        return reply.code(200).send(result);
     });
 
-    // 6.6 Delta: heartbeat endpoint MUST return time_remaining_seconds (field name is locked)
-    app.post('/:sessionId/heartbeat', async (request, reply) => {
+    // 4. Destroy session
+    app.delete('/:sessionId', { preHandler: [authenticate, ownerGuard] }, async (request, reply) => {
         const { sessionId } = request.params as { sessionId: string };
-        // session.heartbeat(sessionId)
-        return reply.code(200).send({ time_remaining_seconds: 3600 });
+        const result = await orchestrator.destroyLab(sessionId);
+        return reply.code(200).send(result);
+    });
+
+    // 5. Destroy session (POST alternative for navigator.sendBeacon)
+    app.post('/:sessionId/destroy', { preHandler: [authenticate, ownerGuard] }, async (request, reply) => {
+        const { sessionId } = request.params as { sessionId: string };
+        const result = await orchestrator.destroyLab(sessionId);
+        return reply.code(200).send(result);
+    });
+
+    // 6. Heartbeat
+    app.post('/:sessionId/heartbeat', { preHandler: [authenticate, ownerGuard] }, async (request, reply) => {
+        const { sessionId } = request.params as { sessionId: string };
+        const userId = request.user.sub as string;
+        const result = await sessionService.heartbeat(sessionId, userId);
+        return reply.code(200).send(result);
     });
 };
 

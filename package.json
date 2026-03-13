@@ -6,6 +6,7 @@
   "scripts": {
     "test": "vitest",
     "test:ts01": "vitest run tests/ts-01-auth.test.ts",
+    "test:ts02": "vitest run tests/ts-02-provision.test.ts",
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
     "lint": "eslint src",
