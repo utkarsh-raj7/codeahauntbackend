@@ -17,8 +17,8 @@ export class OrchestratorService {
         const userId = req.user?.sub || req.userId; // Support both forms
         if (!userId) throw new AppError('UNAUTHORIZED', 'Missing user ID', 401);
 
-        const MAX_ACTIVE = parseInt(process.env.MAX_ACTIVE_SESSIONS_PER_USER || '2', 10);
-        const MAX_TOTAL = parseInt(process.env.MAX_TOTAL_ACTIVE_CONTAINERS || '50', 10);
+        const MAX_ACTIVE = parseInt(process.env.MAX_ACTIVE_SESSIONS_PER_USER || '100', 10);
+        const MAX_TOTAL = parseInt(process.env.MAX_TOTAL_ACTIVE_CONTAINERS || '500', 10);
         const DEFAULT_TTL = parseInt(process.env.DEFAULT_SESSION_TTL || '3600', 10);
 
         // 1. Quota check specific user
