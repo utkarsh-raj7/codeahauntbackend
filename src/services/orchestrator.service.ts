@@ -71,7 +71,7 @@ export class OrchestratorService {
 
         // 7. Return record
         return {
-            id: sessionId,
+            session_id: sessionId,
             userId,
             labId,
             status: 'provisioning',

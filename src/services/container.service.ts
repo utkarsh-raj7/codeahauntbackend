@@ -1,7 +1,16 @@
 import Docker from 'dockerode';
+import { existsSync } from 'fs';
+import { homedir } from 'os';
 import { AppError } from '../types';
 
-const docker = new Docker({ socketPath: process.env.DOCKER_SOCKET || '/var/run/docker.sock' });
+function getDockerSocket(): string {
+    if (process.env.DOCKER_SOCKET) return process.env.DOCKER_SOCKET;
+    const colima = `${homedir()}/.colima/default/docker.sock`;
+    if (existsSync(colima)) return colima;
+    return '/var/run/docker.sock';
+}
+
+const docker = new Docker({ socketPath: getDockerSocket() });
 
 export interface ContainerConfig {
     sessionId: string;
@@ -34,7 +43,7 @@ export class ContainerService {
                 Image: config.image,
                 name: `lab-${config.sessionId}`,
                 HostConfig: {
-                    NanoCPUs: cpuLimit,
+                    NanoCpus: cpuLimit,
                     Memory: memoryLimit,
                     NetworkMode: networkMode,
                     SecurityOpt: ['no-new-privileges:true'],
@@ -52,7 +61,7 @@ export class ContainerService {
                 }
             });
 
-            return container.id;
+            return container.id as string;
         } catch (err: any) {
             throw new AppError('CONTAINER_ERROR', `Failed to create container: ${err.message}`, 500);
         }
@@ -141,10 +150,10 @@ export class ContainerService {
 
                 // Docker stream is multiplexed, docker-modem can demux
                 docker.modem.demuxStream(stream, {
-                    write: (chunk: Buffer) => { stdout += chunk.toString('utf8'); }
-                }, {
-                    write: (chunk: Buffer) => { stderr += chunk.toString('utf8'); }
-                });
+                    write: (chunk: Buffer) => { stdout += chunk.toString('utf8'); return true; }
+                } as any, {
+                    write: (chunk: Buffer) => { stderr += chunk.toString('utf8'); return true; }
+                } as any);
 
                 const timeout = setTimeout(() => {
                     resolve({ stdout, stderr, exitCode: 124 }); // timeout code

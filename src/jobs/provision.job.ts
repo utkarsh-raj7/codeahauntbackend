@@ -1,21 +1,27 @@
-import { Worker, Job } from 'bullmq';
-import { redisClient } from '../config/redis';
+import { Worker, Job, Queue } from 'bullmq';
 import { containerService } from '../services/container.service';
+import { authService } from '../services/auth.service';
 import { db } from '../config/database';
 import { sessions } from '../db/schema/sessions';
+import { labs } from '../db/schema/labs';
 import { eq } from 'drizzle-orm';
 import { publishEvent } from '../utils/publishEvent';
-// authService is Phase 4, mock for now
-// import { authService } from '../services/auth.service';
 
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
+const tokenRefreshQueue = new Queue('token-refresh', { connection: { url: REDIS_URL } });
 
 export const provisionWorker = new Worker('provision', async (job: Job) => {
     const { sessionId, labId, userId, dockerImage, initScript, exposePort } = job.data;
 
     try {
+        // Fetch lab definition from DB for correct docker image
+        const labRecord = await db.select().from(labs).where(eq(labs.id, labId));
+        const lab = labRecord[0];
+        const image = dockerImage || lab?.dockerImage || 'lab-k8s-basics:latest';
+        const port = exposePort || lab?.exposePort || 7681;
+
         const containerId = await containerService.createContainer({
-            sessionId, userId, image: dockerImage || 'lab-k8s-basics:latest', exposePort
+            sessionId, userId, image, exposePort: port
         });
         await containerService.startContainer(containerId);
 
@@ -33,8 +39,8 @@ export const provisionWorker = new Worker('provision', async (job: Job) => {
             throw new Error('Container failed to start within 60s');
         }
 
-        // Generate embed token (to be implemented strictly by Person 2)
-        const embedToken = 'mock-embed-token-replace-in-phase-4';
+        // Real embed token via authService
+        const embedToken = await authService.issueEmbedToken(sessionId, userId);
 
         const baseDomain = process.env.BASE_DOMAIN || 'labs.yourdomain.com';
         const terminal_url = `https://${sessionId}.${baseDomain}/terminal?token=${embedToken}`;
@@ -50,6 +56,12 @@ export const provisionWorker = new Worker('provision', async (job: Job) => {
 
         await publishEvent(sessionId, 'session_ready', { terminal_url });
 
+        // Schedule token refresh — re-issue embed token every 9 minutes
+        await tokenRefreshQueue.add('refresh-embed-token',
+            { sessionId, userId },
+            { delay: 9 * 60 * 1000, repeat: { every: 9 * 60 * 1000 } }
+        );
+
     } catch (err: any) {
         await db.update(sessions)
             .set({ status: 'error', errorMessage: err.message })
@@ -57,7 +69,7 @@ export const provisionWorker = new Worker('provision', async (job: Job) => {
 
         try {
             await containerService.removeContainer(`lab-${sessionId}`);
-        } catch { }
+        } catch { /* cleanup best-effort */ }
 
         throw err;
     }

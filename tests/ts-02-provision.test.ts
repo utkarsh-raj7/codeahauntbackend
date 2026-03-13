@@ -74,7 +74,7 @@ describe('TS-02: Provision & Session Lifecycle (Phase 2+5)', () => {
         expect(result.userId).toBe('user-123');
         expect(result.labId).toBe('k8s-basics-01');
         expect(result.status).toBe('provisioning');
-        expect(result.id).toBeDefined();
+        expect(result.session_id).toBeDefined();
     });
 
     it('T02: provisionLab should throw QUOTA_EXCEEDED when user has max sessions', async () => {

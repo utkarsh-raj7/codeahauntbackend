@@ -66,13 +66,14 @@ export async function setupWebSocketGateway(app: FastifyInstance) {
                     if (currentTtl > 0 && currentTtl <= TIME_WARNING_THRESHOLD) {
                         con.socket.send(JSON.stringify({
                             type: 'time_warning',
-                            seconds_remaining: currentTtl,
+                            minutes_remaining: Math.ceil(currentTtl / 60),
                             ts: Date.now(),
                         }));
                     }
                     if (currentTtl <= 0) {
                         con.socket.send(JSON.stringify({
                             type: 'session_expired',
+                            reason: 'ttl_reached',
                             ts: Date.now(),
                         }));
                         con.socket.close(1000, 'Session expired');

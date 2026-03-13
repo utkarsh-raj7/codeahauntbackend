@@ -1,0 +1,460 @@
+CODE-A-HAUNT 3.0
+Cloud-Based Lab Management System
+
+  COMPREHENSIVE BACKEND IMPLEMENTATION PLAN  
+
+Revised Edition  ·  March 2026  ·  Post Phase 1–6 Audit
+
+Phase 1–3
+✅ Complete
+Phase 4
+✅ Complete
+Phase 5
+✅ Complete
+Phase 6
+⚠ Partial
+
+
+🚨  CRITICAL GAP: Sessions stay in 'provisioning' permanently — BullMQ worker is not creating Docker containers.
+    terminal_url is never populated. Labs are not usable end-to-end.
+    This plan defines exactly what must be fixed and in what order.
+
+
+Section 1 — Current State Audit
+A precise record of what is working, what is broken, and what was added outside scope. Verified through Checkpoint 1 and Checkpoint 2 results.
+
+1.1  Working — Verified
+PostgreSQL — 6 tables migrated, all indexes and constraints correct
+Redis — two instances (command + subscriber), keyspace events enabled (KEA)
+Fastify — CORS, Helmet, rate-limit, WebSocket plugins registered
+Firebase dual-path auth — Firebase ID token + internal JWT fallback, embed tokens blocked on REST
+Auth routes — /login, /refresh, /logout with 5 req/IP/60s rate limit on login
+ownerGuard + errorHandler — ownership checks and unified error.code shape
+catalog.routes.ts — public, paginated, Redis-cached 5 min TTL, verified in Redis
+labs.routes.ts — all endpoints with ownerGuard, POST /destroy for sendBeacon included
+schedule.routes.ts + admin.routes.ts — routes registered, adminOnly guard pattern in place
+validation.service.ts — container_id sourced from DB session record (T47 rule)
+BullMQ job files — provision.job.ts, cleanup.job.ts, monitor.job.ts exist and start
+CI/CD — GitHub Actions with Firebase secrets, test order correct (TS-01 first)
+Kubernetes manifests — all 6 deployment files generated
+
+1.2  Broken — Critical Path
+🚨  These 5 items block Checkpoint 3. Fix in order before running any more tests.
+
+
+#
+Component
+Problem
+Impact
+1
+Docker socket
+Colima socket on macOS is ~/.colima/default/docker.sock — not /var/run/docker.sock. Worker cannot connect to Docker daemon. Sessions stuck in 'provisioning'.
+Labs 100% unusable
+2
+terminal_url
+Never populated because provision job never reaches the ready-state DB update.
+Terminal inaccessible
+3
+Firebase PEM in Docker
+Private key \n escaping fails inside Docker worker container. Worker exits silently — no containers created.
+Worker dead in Docker
+4
+Dynamic ttl_seconds
+Added to POST /provision request body outside spec. Frontend does not send this field. Breaks contract.
+Frontend contract broken
+5
+test-frontend.html
+Added outside scope. Creates false impression that labs work. Not part of backend deliverable.
+Scope creep
+
+
+1.3  Added Outside Scope — Must Be Reverted
+ttl_seconds in POST /provision body
+Revert — TTL is per-lab in DB. Frontend does not send this.
+test-frontend.html
+Remove from repo — backend does not own frontend code.
+POST /labs/:labId/provision URL
+Verify route matches spec: POST /labs/provision with lab_id in body, not URL
+
+
+Section 2 — Immediate Fixes (Before Checkpoint 3)
+Complete in order. Do not run Checkpoint 3 until all 5 are verified green.
+
+Fix 1 — Docker Socket Path (Root Cause)
+This is the single cause of all provisioning failures. The socket path is wrong for macOS + Colima.
+
+# Step 1: Find your actual socket
+colima status
+ls -la ~/.colima/default/docker.sock
+ 
+# Step 2: Update .env.dev
+DOCKER_SOCKET=/Users/<your-username>/.colima/default/docker.sock
+ 
+# Step 3: Fix container.service.ts
+const DOCKER_SOCKET = process.env.DOCKER_SOCKET
+  ?? `${process.env.HOME}/.colima/default/docker.sock`;
+const docker = new Dockerode({ socketPath: DOCKER_SOCKET });
+ 
+# Step 4: Verify dockerode can connect
+node -e "require('dockerode')
+  .then ? null : new (require('dockerode'))({socketPath: process.env.DOCKER_SOCKET})
+  .ping().then(r=>console.log('OK',r)).catch(console.error)"
+
+Fix 2 — Firebase PEM in Docker Worker
+# .env.dev — key on ONE line, \n escaped
+FIREBASE_ADMIN_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nMIIE...\n-----END PRIVATE KEY-----\n"
+ 
+# firebase-admin.ts — this replace() must exist
+privateKey: process.env.FIREBASE_ADMIN_PRIVATE_KEY?.replace(/\\n/g, '\n')
+ 
+# Verify worker starts cleanly in Docker
+docker-compose -f docker/docker-compose.dev.yml up -d worker
+docker logs labbackend-worker-1 --tail 20
+# Must show: BullMQ workers ready — zero Firebase error lines
+
+Fix 3 — Build Lab Docker Images
+docker build -t lab-k8s-basics:latest docker/lab-images/k8s-basics/
+docker build -t lab-linux-basics:latest docker/lab-images/linux-fundamentals/
+ 
+# Smoke test
+docker run -d --name ttyd-test -p 7681:7681 lab-k8s-basics:latest
+curl http://localhost:7681   # must return ttyd HTML
+docker stop ttyd-test && docker rm ttyd-test
+
+Fix 4 — Revert Out-of-Scope Changes
+4a — Remove ttl_seconds from provision body:
+// labs.routes.ts — ProvisionBody
+const ProvisionBody = z.object({
+  lab_id: z.string().min(1).max(100).regex(/^[a-z0-9-]+$/),
+  course_id: z.string().optional(),
+  options: z.object({ persist_on_exit: z.boolean().default(false) }).optional(),
+  // REMOVE: ttl_seconds — not in spec
+});
+ 
+// orchestrator.service.ts — TTL always from lab DB record
+const ttlSeconds = lab.ttlSeconds;  // never from request
+
+4b — Remove test-frontend.html:
+git rm test-frontend.html
+git commit -m 'chore: remove out-of-scope test frontend'
+
+Fix 5 — End-to-End Verification (Critical Gap Closure)
+Run only after Fixes 1–4. This verifies the provision flow actually works.
+
+# Terminal 1
+npm run dev:worker   # watch for job processing logs
+ 
+# Terminal 2
+npm run dev
+ 
+# Terminal 3 — provision and poll
+TOKEN=$(curl -s -X POST http://localhost:3001/api/v1/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"seed@example.com","password":"password123"}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+ 
+SESSION=$(curl -s -X POST http://localhost:3001/api/v1/labs/provision \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"lab_id":"k8s-basics-01"}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['session_id'])")
+ 
+sleep 30 && curl -s http://localhost:3001/api/v1/labs/$SESSION/status \
+  -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
+ 
+# SUCCESS: status='ready', terminal_url='http://sess-xxxx.labs.yourdomain.com/...'
+# FAILURE: status='provisioning' — go back to Fix 1
+
+Section 3 — Checkpoint 3: Full 72-Test Suite
+Run only after Section 2 is fully green. Both people present. This is the final shippability gate.
+
+3.1  Automated Tests
+Suite
+Tests
+Covers
+Status
+TS-01
+T01–T12
+Auth, token types, embed rejection, rate limit
+✅ Written — run first
+TS-02
+T13–T30
+Provision, quota, idempotency, destroy, status
+✅ Written — 8/8 passing
+TS-03
+T31–T44
+Session lifecycle, TTL expiry with fake timers
+❌ Not yet written
+TS-04
+T45–T54
+Step validation, container_id from DB, timeout
+❌ Not yet written
+TS-05
+T55–T62
+Resource monitoring, CPU warning threshold
+❌ Not yet written
+TS-06
+T63–T72
+Scheduling, slot overlap, concurrent race
+❌ Not yet written
+
+
+⚠  TS-03 through TS-06 must use vitest fake timers — never wait real seconds in tests. Use vi.useFakeTimers() and vi.advanceTimersByTime() for all TTL and timeout scenarios.
+
+
+3.2  Manual Verification Sequence
+1. Full stack with worker in Docker:
+docker-compose -f docker/docker-compose.dev.yml up -d
+docker ps   # all 5: postgres, redis, traefik, api, worker
+docker logs labbackend-worker-1 --tail 5   # workers ready
+
+2. Provision → ready → terminal_url:
+# As above in Fix 5 — terminal_url MUST be populated
+
+3. WebSocket heartbeat:
+wscat -c "ws://localhost:3000/ws/v1/labs/$SESSION/events" \
+  --subprotocol "Bearer, $TOKEN"
+# Send: {"type":"heartbeat"}
+# Receive: {"type":"heartbeat_ack","time_remaining_seconds":<n>}
+
+4. Cross-session access (must fail):
+curl http://localhost:3000/api/v1/labs/00000000-0000-0000-0000-000000000000/status \
+  -H "Authorization: Bearer $TOKEN"
+# → 403 FORBIDDEN or 404 SESSION_NOT_FOUND
+
+5. Concurrent provision idempotency:
+for i in {1..5}; do
+  curl -s -X POST http://localhost:3000/api/v1/labs/provision \
+    -H "Authorization: Bearer $TOKEN" \
+    -H 'Content-Type: application/json' \
+    -d '{"lab_id":"k8s-basics-01"}' &
+done; wait
+# First: 202. Rest: 409 LAB_ALREADY_RUNNING. Zero duplicate containers.
+
+6. sendBeacon simulation:
+curl -X POST http://localhost:3000/api/v1/labs/$SESSION/destroy \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: text/plain'
+# → 200 { status: 'destroyed' }
+
+7. Cleanup:
+docker ps | grep $SESSION     # empty
+redis-cli GET sess:$SESSION   # nil
+
+8. Admin role guard:
+curl http://localhost:3000/api/v1/admin/metrics \
+  -H "Authorization: Bearer $STUDENT_TOKEN"
+# → 403 FORBIDDEN
+
+Section 4 — Remaining Phase 6 Work
+Three items from Phase 6 are incomplete or need verification before Checkpoint 3.
+
+4.1  Token Refresh Job — Not Implemented
+Embed tokens expire in 10 minutes. A BullMQ delayed job must re-issue them and push the new URL via WebSocket. Frontend updates iframe src on token_refresh event.
+
+// src/jobs/tokenRefresh.job.ts — new file
+tokenRefreshWorker.process(async (job) => {
+  const { sessionId, userId } = job.data;
+  const session = await getSession(sessionId);
+  if (!session || session.status !== 'ready') return;
+  const newToken = await authService.issueEmbedToken(sessionId, userId);
+  const newUrl = `https://${session.subdomain}.${BASE_DOMAIN}/terminal?token=${newToken}`;
+  await db.update(sessions).set({ terminalUrl: newUrl }).where(eq(sessions.id, sessionId));
+  await publishEvent(sessionId, 'token_refresh', { terminal_url: newUrl });
+});
+ 
+// In provision.job.ts — add after session goes ready:
+await tokenRefreshQueue.add('refresh-embed-token', { sessionId, userId },
+  { delay: 9*60*1000, repeat: { every: 9*60*1000 } });
+
+4.2  gateway.ts — Verify Time Warning and Cleanup
+// Confirm this pattern exists and clearInterval fires on close
+const warningInterval = setInterval(async () => {
+  const ttl = await redisClient.ttl(`sess:${sessionId}`);
+  if (ttl > 0 && ttl <= 300) {
+    publishEvent(sessionId, 'time_warning', { minutes_remaining: Math.ceil(ttl/60) });
+  }
+  if (ttl <= 0) {
+    publishEvent(sessionId, 'session_expired', { reason: 'ttl_reached' });
+    socket.close(1000, 'Session expired');
+  }
+}, 30000);
+ 
+socket.on('close', () => {
+  clearInterval(warningInterval);   // MUST exist — memory leak if missing
+  subscriber.unsubscribe(channel);
+  subscriber.quit();
+});
+
+4.3  scheduler.service.ts — Real Slot Overlap Detection
+The scheduler was implemented with stubs. Slot overlap and queue advance logic must be real before schedule routes are testable.
+
+// Overlap query — exact pattern required
+const overlap = await db.query.bookings.findFirst({ where: and(
+  eq(bookings.labId, labId),
+  inArray(bookings.status, ['confirmed']),
+  lte(bookings.slotStart, slotEnd),
+  gte(bookings.slotEnd, slotStart)
+) });
+if (overlap) throw new AppError('SLOT_UNAVAILABLE', 409);
+ 
+// Queue advance on cancel — promote first queued booking to confirmed
+
+Section 5 — Locked Contracts
+These interfaces are consumed by the frontend. Any rename or restructure breaks the frontend without warning. Do not change without explicit agreement from both teams.
+
+5.1  API Response Fields — Locked
+Endpoint
+Locked Field
+Reason
+POST /labs/provision
+session_id (UUID v4)
+Frontend URL is /labs/[sessionId]
+POST /:sessionId/heartbeat
+time_remaining_seconds
+Frontend countdown timer
+Any error
+error.code (string)
+Frontend switch/case on this field
+GET /:sessionId/status
+status, terminal_url
+Frontend polls until status==='ready'
+POST /:sessionId/destroy
+status: 'destroyed'
+sendBeacon POST endpoint
+
+
+5.2  WebSocket Event Types — Locked
+session_ready
+{ terminal_url: string } — triggers iframe load
+session_expired
+{ reason: string } — triggers cleanup UI
+heartbeat_ack
+{ time_remaining_seconds: number } — resets countdown
+time_warning
+{ minutes_remaining: number } — shows warning banner
+token_refresh
+{ terminal_url: string } — updates iframe src without reload
+step_passed
+{ step_id, next_step_id } — advances step progress UI
+resource_warning
+{ cpu_percent, memory_mb } — shows resource alert
+
+
+5.3  Shared Utility — Locked Signature
+🔒  publishEvent(sessionId: string, type: string, payload: Record<string, unknown>): Promise<void>
+    Import: import { publishEvent } from '../utils/publishEvent'
+    Used by: provision.job.ts, cleanup.job.ts, monitor.job.ts, gateway.ts, tokenRefresh.job.ts
+    Do NOT rename, move, or add parameters without updating all 5 import sites.
+
+
+Section 6 — Production Readiness
+Required before Kubernetes staging deploy. Separate from Checkpoint 3.
+
+6.1  Security Checklist
+Container isolation: no docker.sock mounted inside lab containers
+docker exec into lab container → run 'docker ps' → must fail
+Metadata endpoint blocked from inside containers
+curl http://169.254.169.254 from inside lab container → must timeout
+Cross-container network isolation verified
+no-new-privileges:true in all HostConfigs — verified Phase 2
+No real secrets in git history
+git log --all -p | grep PRIVATE_KEY → must return nothing
+
+6.2  GitHub Secrets Required
+FIREBASE_PROJECT_ID
+Firebase project ID
+FIREBASE_ADMIN_CLIENT_EMAIL
+Service account email
+FIREBASE_ADMIN_PRIVATE_KEY
+Private key with \n escaping
+JWT_SECRET
+256-bit random string
+JWT_EMBED_SECRET
+Different 256-bit random string — not same as JWT_SECRET
+DATABASE_URL
+Production PostgreSQL connection string
+REDIS_URL
+Production Redis connection string
+
+
+6.3  Kubernetes Pre-Deploy
+Sealed secrets — never commit real values in k8s/secrets.yaml
+Wildcard TLS cert for *.labs.yourdomain.com — required for HTTPS terminal_url
+Without HTTPS, browser blocks iframe as Mixed Content in production
+Traefik with cert-manager or manual cert provisioned
+PersistentVolumeClaim for PostgreSQL — 10Gi minimum
+
+6.4  Staging Smoke Test
+POST /provision → status reaches 'ready' within 30s
+terminal_url loads in browser iframe — no Mixed Content error
+Shell prompt appears in ttyd within 5s of iframe load
+DELETE /labs/:id → container gone from docker ps within 5s
+10 concurrent provisions → no duplicate subdomains, no errors
+Session TTL expiry → progress rows still in DB, container cleaned up
+
+Section 7 — Execution Order From Here
+
+Step
+Owner
+Task
+Gate
+1
+Person 1
+Fix DOCKER_SOCKET path in .env.dev and container.service.ts
+Unblocks everything
+2
+Person 1
+Fix Firebase PEM escaping — verify worker starts in Docker
+Worker must be green
+3
+Person 1
+Build lab Docker images (k8s-basics, linux-basics)
+Images must exist locally
+4
+Person 2
+Revert ttl_seconds from provision route and orchestrator
+Contract restored
+5
+Person 2
+git rm test-frontend.html + commit
+Scope clean
+6
+Both
+End-to-end: provision → ready → terminal_url populated
+Critical gap closed
+7
+Person 2
+Write TS-03 through TS-06 test suites using fake timers
+72 tests runnable
+8
+Person 2
+Implement tokenRefresh.job.ts + wire into provision.job.ts
+Phase 6 complete
+9
+Person 1
+Verify gateway.ts clearInterval on socket close
+No memory leaks
+10
+Person 2
+Implement real slot overlap in scheduler.service.ts
+Schedule routes usable
+11
+Both
+Checkpoint 3 — all 72 tests + full manual sequence
+Shippable backend
+12
+Both
+Add GitHub secrets, push to main, verify CI pipeline green
+CI gate
+13
+Both
+Kubernetes staging deploy + staging smoke test
+Done
+
+
+🚨  Steps 1 and 6 are the critical path — fix the Docker socket first, verify terminal_url appears, then everything else.
+    Do not move past Step 6 until a real terminal_url is returned in the status response.
+    Do not run Checkpoint 3 until Steps 1–10 are all complete.
+
+
+Code-A-Haunt 3.0  ·  Comprehensive Backend Plan  ·  March 2026
