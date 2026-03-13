@@ -1,8 +1,23 @@
 import { db } from '../config/database';
 import { labs } from './schema/labs';
+import { users } from './schema/users';
+import bcrypt from 'bcrypt';
+import { randomUUID } from 'crypto';
 
 async function seed() {
     console.log('Seeding labs...');
+
+    const passwordHash = await bcrypt.hash('password123', 12);
+
+    await db.insert(users).values([{
+        id: randomUUID(),
+        email: 'seed-user@example.com',
+        name: 'Test Seed User',
+        passwordHash,
+        role: 'student'
+    }]).onConflictDoNothing();
+
+    console.log('Seeding user...');
 
     await db.insert(labs).values([
         {

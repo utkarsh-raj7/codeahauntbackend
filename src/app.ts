@@ -1,4 +1,4 @@
-import Fastify, { FastifyInstance } from 'fastify';
+import Fastify, { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import websocket from '@fastify/websocket';
@@ -6,11 +6,21 @@ import rateLimit from '@fastify/rate-limit';
 import { sql } from 'drizzle-orm';
 import { db } from './config/database';
 import { redisClient } from './config/redis';
+import { setupErrorHandler } from './middleware/errorHandler';
+
+import authRoutes from './routes/auth.routes';
+import labsRoutes from './routes/labs.routes';
+import catalogRoutes from './routes/catalog.routes';
 
 export async function buildApp(): Promise<FastifyInstance> {
     const app = Fastify({ logger: true });
 
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+
+    // Register primary routes
+    await app.register(authRoutes, { prefix: '/api/v1/auth' });
+    await app.register(labsRoutes, { prefix: '/api/v1/labs' });
+    await app.register(catalogRoutes, { prefix: '/api/v1/catalog' });
 
     // 1. Register plugins
     await app.register(cors, {
@@ -43,7 +53,7 @@ export async function buildApp(): Promise<FastifyInstance> {
     });
 
     // 3. Ready endpoint — readiness probe (returns 503 if DB or Redis is down)
-    app.get('/ready', async (_request, reply) => {
+    app.get('/ready', async (_request: FastifyRequest, reply: FastifyReply) => {
         try {
             await db.execute(sql`SELECT 1`);
             const pong = await redisClient.ping();
@@ -54,6 +64,9 @@ export async function buildApp(): Promise<FastifyInstance> {
             return reply.code(503).send({ status: 'error', message: 'Service Unavailable' });
         }
     });
+
+    // 4. Global Error Handler Registration
+    setupErrorHandler(app);
 
     return app;
 }

@@ -5,6 +5,7 @@
   "main": "index.js",
   "scripts": {
     "test": "vitest",
+    "test:ts01": "vitest run tests/ts-01-auth.test.ts",
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
     "lint": "eslint src",
@@ -16,6 +17,7 @@
   "license": "ISC",
   "type": "commonjs",
   "devDependencies": {
+    "@types/bcrypt": "^6.0.0",
     "@types/dockerode": "^4.0.1",
     "@types/node": "^25.5.0",
     "@types/pg": "^8.18.0",
@@ -29,7 +31,8 @@
     "ts-node": "^10.9.2",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.57.0"
+    "typescript-eslint": "^8.57.0",
+    "vitest": "^4.1.0"
   },
   "dependencies": {
     "@fastify/cors": "^8.5.0",
@@ -44,6 +47,7 @@
     "fastify": "^4.29.1",
     "firebase-admin": "^13.7.0",
     "ioredis": "^5.10.0",
+    "jose": "^6.2.1",
     "jsonwebtoken": "^9.0.3",
     "nodemailer": "^8.0.2",
     "pg": "^8.20.0",

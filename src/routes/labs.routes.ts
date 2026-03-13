@@ -1,8 +1,18 @@
 import { FastifyPluginAsync } from 'fastify';
 import { authenticate } from '../middleware/authenticate';
+import { db } from '../config/database';
+import { sessions } from '../db/schema/sessions';
+import { eq } from 'drizzle-orm';
 
 const labsRoutes: FastifyPluginAsync = async (app) => {
     app.addHook('preHandler', authenticate);
+
+    // Pre-Checkpoint 1 validation endpoint
+    app.get('/sessions', async (request, reply) => {
+        const userId = request.user.sub as string;
+        const userSessions = await db.select().from(sessions).where(eq(sessions.userId, userId));
+        return reply.code(200).send(userSessions);
+    });
 
     // Existing DELETE logic for ending a session
     app.delete('/:sessionId', async (request, reply) => {
