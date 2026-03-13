@@ -28,6 +28,25 @@ const catalogRoutes: FastifyPluginAsync = async (app) => {
         await redisClient.set(cacheKey, JSON.stringify(labRecords), 'EX', 300); // 5 min TTL
         return reply.code(200).send(labRecords);
     });
+
+    // GET /labs/:labId — single lab definition with steps
+    app.get('/labs/:labId', async (request, reply) => {
+        const { labId } = request.params as { labId: string };
+        const cacheKey = `catalog:lab:${labId}`;
+
+        const cached = await redisClient.get(cacheKey);
+        if (cached) {
+            return reply.code(200).send(JSON.parse(cached));
+        }
+
+        const labRecord = await db.select().from(labs).where(eq(labs.id, labId));
+        if (!labRecord.length) {
+            return reply.code(404).send({ error: { code: 'LAB_NOT_FOUND', message: 'Lab not found', http_status: 404 } });
+        }
+
+        await redisClient.set(cacheKey, JSON.stringify(labRecord[0]), 'EX', 300);
+        return reply.code(200).send(labRecord[0]);
+    });
 };
 
 export default catalogRoutes;
