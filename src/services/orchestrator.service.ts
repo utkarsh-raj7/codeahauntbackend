@@ -1,0 +1,126 @@
+import { FastifyRequest } from 'fastify';
+import { db } from '../config/database';
+import { sessions } from '../db/schema/sessions';
+import { eq, and } from 'drizzle-orm';
+import { containerService } from './container.service';
+import { AppError } from '../types';
+import { Queue } from 'bullmq';
+import { redisClient } from '../config/redis';
+import { publishEvent } from '../utils/publishEvent';
+import { randomUUID } from 'crypto';
+
+const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
+export const provisionQueue = new Queue('provision', { connection: { url: REDIS_URL } });
+
+export class OrchestratorService {
+    async provisionLab(req: FastifyRequest | any, labId: string, options: any = {}) {
+        const userId = req.user?.sub || req.userId; // Support both forms
+        if (!userId) throw new AppError('UNAUTHORIZED', 'Missing user ID', 401);
+
+        const MAX_ACTIVE = parseInt(process.env.MAX_ACTIVE_SESSIONS_PER_USER || '2', 10);
+        const MAX_TOTAL = parseInt(process.env.MAX_TOTAL_ACTIVE_CONTAINERS || '50', 10);
+        const DEFAULT_TTL = parseInt(process.env.DEFAULT_SESSION_TTL || '3600', 10);
+
+        // 1. Quota check specific user
+        const userSessions = await db.select().from(sessions).where(
+            and(eq(sessions.userId, userId), eq(sessions.status, 'ready'))
+        );
+        if (userSessions.length >= MAX_ACTIVE) {
+            throw new AppError('QUOTA_EXCEEDED', `Max ${MAX_ACTIVE} sessions allowed`, 403);
+        }
+
+        // 2. Idempotency Check
+        const existing = await db.select().from(sessions).where(
+            and(eq(sessions.userId, userId), eq(sessions.labId, labId))
+        );
+        const activeExisting = existing.find(s => ['provisioning', 'ready'].includes(s.status));
+        if (activeExisting) return activeExisting;
+
+        // 3. Global Capacity
+        const allContainers = await containerService.listLabContainers();
+        if (allContainers.length >= MAX_TOTAL) {
+            throw new AppError('LAB_CAPACITY_FULL', 'System at maximum capacity', 503);
+        }
+
+        const sessionId = randomUUID();
+        const baseDomain = process.env.BASE_DOMAIN || 'labs.yourdomain.com';
+
+        // 4. SET Redis key (acquire lock first)
+        await redisClient.set(`sess:${sessionId}`, '1', 'EX', DEFAULT_TTL);
+
+        // 5. Insert DB
+        await db.insert(sessions).values({
+            id: sessionId,
+            userId,
+            labId,
+            status: 'provisioning',
+            subdomain: `${sessionId}.${baseDomain}`,
+            ttlSeconds: DEFAULT_TTL,
+            expiresAt: new Date(Date.now() + DEFAULT_TTL * 1000)
+        });
+
+        // 6. Enqueue job
+        await provisionQueue.add('provision-lab', {
+            sessionId,
+            labId,
+            userId,
+            dockerImage: options.dockerImage,
+            initScript: options.initScript,
+            exposePort: options.exposePort || 7681
+        }); // Failsafe timeout handled within worker logic
+
+        // 7. Return record
+        return {
+            id: sessionId,
+            userId,
+            labId,
+            status: 'provisioning',
+            expiresAt: new Date(Date.now() + DEFAULT_TTL * 1000)
+        };
+    }
+
+    async destroyLab(sessionId: string) {
+        const sessionRecord = await db.select().from(sessions).where(eq(sessions.id, sessionId));
+        if (!sessionRecord || sessionRecord.length === 0) {
+            throw new AppError('SESSION_NOT_FOUND', 'Session not found', 404);
+        }
+
+        const s = sessionRecord[0];
+        if (s.status === 'destroyed') return { status: 'destroyed' };
+
+        // Stop + Remove
+        if (s.containerId) {
+            try {
+                await containerService.stopContainer(s.containerId);
+                await containerService.removeContainer(s.containerId);
+            } catch (err: any) {
+                console.warn(`Could not completely remove container for session ${sessionId}:`, err);
+            }
+        }
+
+        await redisClient.del(`sess:${sessionId}`);
+
+        await db.update(sessions)
+            .set({ status: 'destroyed', endedAt: new Date() })
+            .where(eq(sessions.id, sessionId));
+
+        await publishEvent(sessionId, 'session_expired', {});
+
+        return { status: 'destroyed' };
+    }
+
+    async getSessionStatus(sessionId: string, userId: string) {
+        const sessionRecord = await db.select().from(sessions).where(eq(sessions.id, sessionId));
+        if (!sessionRecord || sessionRecord.length === 0) {
+            throw new AppError('SESSION_NOT_FOUND', 'Session not found', 404);
+        }
+        const s = sessionRecord[0];
+        if (s.userId !== userId) {
+            throw new AppError('FORBIDDEN', 'Access denied', 403);
+        }
+
+        return { status: s.status, terminal_url: s.terminalUrl };
+    }
+}
+
+export const orchestrator = new OrchestratorService();

@@ -1,0 +1,1559 @@
+
+  CODE-A-HAUNT 3.0  
+ 
+Cloud-Based Lab Management
+Backend — Validation Plan  &  Full Implementation Blueprint
+Problem #4  ·  Cloud Computing  ·  Medium Difficulty
+March 2026
+
+
+
+DOCUMENT CONTENTS
+
+Part
+Contents
+PART A
+Validation Plan — 6 test suites proving the backend works before writing a single line of code
+PART B
+Project Setup — Tech stack, folder structure, dependencies, environment config
+PART C
+Database Design — All schemas, relations, indexes, and migration strategy
+PART D
+Core Services — Auth, Lab Orchestrator, Container Runtime, Terminal Proxy, Scheduler
+PART E
+API Layer — All endpoints, middleware, validation, rate limiting, error handling
+PART F
+WebSocket & Real-time — Event system, heartbeat protocol, token refresh mechanism
+PART G
+Resource Monitoring — CPU/memory tracking, quota enforcement, auto-cleanup
+PART H
+Scheduling System — Slot booking, conflict detection, queuing, notifications
+PART I
+Security & Hardening — Container isolation, secrets management, CORS, audit log
+PART J
+Deployment — Docker Compose (dev), Kubernetes manifests (prod), CI/CD pipeline
+
+ 
+
+  PART A    VALIDATION PLAN
+  Six test suites that prove the backend works — run these before and after every major change
+
+Part A: Validation Plan
+Before a single API is deployed, we need a concrete plan to verify the backend does exactly what it promises. This section defines 6 test suites covering provisioning, auth, session lifecycle, step validation, resource limits, and scheduling. Each suite has clear pass/fail criteria.
+
+⚠  Every test listed here maps directly to a real risk. If a test fails, a student either can't start their lab, loses their work, or gets billed for a container that never cleaned up.
+
+A.1  Test Suite Overview
+Suite
+Name
+What it proves
+Tests
+Priority
+TS-01
+Auth & Token Flow
+JWT issuance, refresh, expiry, embed token scoping
+12
+P0
+TS-02
+Lab Provisioning
+Container spins up, URL returned, status transitions correct
+18
+P0
+TS-03
+Session Lifecycle
+Heartbeat, extend, expire, destroy, orphan cleanup
+14
+P0
+TS-04
+Step Validation
+Exec runs inside container, pass/fail returned correctly
+10
+P1
+TS-05
+Resource Monitoring
+CPU/memory tracked, quota enforced, auto-kill on breach
+8
+P1
+TS-06
+Scheduling
+Slot booking, conflict detection, queue, notifications
+10
+P1
+
+A.2  TS-01: Auth & Token Flow
+✖  Failure here means no user can log in or reach any endpoint. Must all pass before integration testing.
+
+ID
+Test Case
+Input
+Expected
+Pass Criteria
+T01
+Login with valid credentials
+Correct email+password
+200 + access_token + refresh_token
+Tokens decoded, user_id matches
+T02
+Login with wrong password
+Wrong password
+401 INVALID_CREDENTIALS
+No token in response body
+T03
+Login with unknown email
+Unregistered email
+401 INVALID_CREDENTIALS
+Same error as T02 (no enumeration)
+T04
+Access protected route with valid token
+Valid Bearer token
+200 + data
+Request reaches handler
+T05
+Access protected route with expired token
+Token age > 15min
+401 TOKEN_EXPIRED
+error.code = TOKEN_EXPIRED
+T06
+Access protected route with malformed token
+Garbage string
+401 UNAUTHORIZED
+error.code = UNAUTHORIZED
+T07
+Refresh with valid refresh token
+Valid refresh_token
+200 + new access_token
+New token valid, old token invalidated
+T08
+Refresh with expired refresh token
+Refresh token age > 7d
+401 REFRESH_EXPIRED
+User must re-login
+T09
+Embed token is scoped to session only
+Lab embed token on /api route
+401 UNAUTHORIZED
+Embed token rejected on API endpoints
+T10
+Embed token accepted by terminal proxy
+Embed token in ?token= param
+101 WebSocket upgrade
+PTY connection established
+T11
+Embed token from session A rejected by session B
+Cross-session embed token
+403 FORBIDDEN
+Token scope validation works
+T12
+Rate limit on /auth/login
+6 requests in 60s
+429 RATE_LIMITED on 6th
+5 allowed, 6th blocked
+
+A.3  TS-02: Lab Provisioning
+⚠  Provisioning is the most complex operation. These tests catch Docker API failures, race conditions, and broken URL generation.
+
+ID
+Test Case
+Input
+Expected
+Pass Criteria
+T13
+Provision a known lab
+Valid lab_id, authed user
+202 + session_id + status=provisioning
+Container started, Redis key set with TTL
+T14
+Provision with unknown lab_id
+lab_id not in catalog
+404 LAB_NOT_FOUND
+No container started
+T15
+Provision duplicate — lab already running
+Same user, same lab_id
+409 LAB_ALREADY_RUNNING + existing session_id
+No second container started
+T16
+Status = provisioning before ready
+Poll immediately after T13
+200 + status=provisioning + terminal_url=null
+terminal_url must be null
+T17
+Status = ready after container up
+Poll after container running
+200 + status=ready + valid terminal_url
+URL is valid HTTPS, token in query
+T18
+Status = error on container crash
+Force container exit code 1
+200 + status=error
+Error recorded in DB, no orphan container
+T19
+Terminal URL contains valid signed token
+Parse terminal_url from T17
+JWT decodes, exp < 10min, scope=session_id
+Token scope correct
+T20
+Provision respects user quota (max 2 active)
+3rd provision request
+429 QUOTA_EXCEEDED
+3rd container never started
+T21
+Provisioning timeout after 60s
+Simulate Docker timeout
+status=error after 60s
+No hanging provisioning state
+T22
+Container assigned unique subdomain
+Two simultaneous provisions
+Two different subdomains
+No subdomain collision
+T23
+Traefik route registered on provision
+After T17
+HTTP GET on subdomain returns 200
+Routing live, not just recorded in DB
+T24
+Resource limits applied to container
+Inspect running container
+CPU<=0.5, Memory<=512MB
+Docker inspect confirms limits
+T25
+Lab image pulled if not cached
+Use image not in local registry
+202 accepted, longer estimated_ready_seconds
+Pull completes, status eventually ready
+T26
+Provision emits WebSocket session_ready event
+Subscribe WS before provision
+session_ready event received
+Event has terminal_url
+T27
+Concurrent provision stress test (10 users)
+10 simultaneous POST /provision
+10 unique sessions created
+No deadlocks, all sessions independent
+T28
+Init script runs inside container
+Lab with init_script defined
+Script output in container logs
+init_script executed before terminal_url issued
+T29
+DB session record created on provision
+Query DB after T13
+Row with session_id exists
+created_at, expires_at populated
+T30
+DB session record updated on ready
+Query DB after T17
+status = ready, terminal_url populated
+terminal_url matches API response
+
+A.4  TS-03: Session Lifecycle
+ID
+Test Case
+Input
+Expected
+Pass Criteria
+T31
+Heartbeat extends Redis TTL
+POST /heartbeat while active
+200 + time_remaining_seconds refreshed
+Redis TTL reset to full value
+T32
+Heartbeat on non-existent session
+POST /heartbeat with fake session_id
+404 SESSION_NOT_FOUND
+No crash, clean error
+T33
+Session auto-expires after TTL
+Wait for TTL or mock time
+status=expired, container destroyed
+Container gone from Docker, DB status=expired
+T34
+WS event sent before expiry (5min warning)
+Session with 5min left
+time_warning event received
+event.minutes_remaining = 5
+T35
+Extend session adds time
+POST /extend with extend_by=1800
+200 + new expires_at +30min
+Redis TTL and DB expires_at both updated
+T36
+Extend past max allowed time
+Extend beyond 4h total
+400 EXTEND_LIMIT_EXCEEDED
+Session not extended
+T37
+DELETE destroys container immediately
+DELETE /labs/{id}
+200 + status=destroyed + container removed
+Docker ps shows container gone
+T38
+WS connection closed on session destroy
+Destroy while WS open
+WS close frame received (code 1001)
+Client WS closes cleanly
+T39
+Orphan cleanup job removes dead containers
+Manually kill container bypassing API
+Cleanup job removes DB record within 2min
+No zombie sessions in DB
+T40
+Session progress preserved on expire
+Check DB after T33
+step statuses still in DB
+Progress survives session expiry
+T41
+Subdomain removed from Traefik on destroy
+After T37
+HTTP GET on subdomain returns 502
+Route deregistered from Traefik
+T42
+Multiple concurrent destroys (idempotent)
+DELETE same session twice
+First: 200, Second: 200 or 404
+No crash on double-delete
+T43
+Session list returns only user's sessions
+GET /labs/sessions as user A
+Only user A's sessions returned
+No data leakage between users
+T44
+Expired sessions not returned in active list
+After T33
+Expired session not in GET /labs/sessions?status=active
+Filter works correctly
+
+A.5  TS-04: Step Validation
+ID
+Test Case
+Input
+Expected
+Pass Criteria
+T45
+Validate a passing step
+User completes step correctly
+200 + status=passed + next_step_id
+Validation script exit code 0
+T46
+Validate a failing step
+Step not completed
+200 + status=failed + hint
+Validation script exit code non-0
+T47
+Validation exec is isolated to user's container
+User A validates step 1
+Exec targets user A's container only
+No cross-container exec possible
+T48
+Validation result saved to DB
+After T45
+DB step record status=passed
+validated_at timestamp populated
+T49
+WS step_passed event emitted on pass
+Subscribe WS, then T45
+step_passed event received
+event.step_id matches validated step
+T50
+Validate on expired session
+POST /validate after session expires
+404 SESSION_NOT_FOUND
+No exec attempted on dead container
+T51
+Validation timeout (10s max)
+Validation script that hangs
+504 VALIDATION_TIMEOUT after 10s
+Exec killed after timeout
+T52
+All steps passed triggers lab complete
+Complete final step
+200 + lab_status=completed
+overall_progress_percent = 100
+T53
+Re-validating already-passed step
+POST /validate on passed step
+200 + status=passed (idempotent)
+No error, result consistent
+T54
+Validate step that doesn't belong to lab
+Wrong step_id for lab
+404 STEP_NOT_FOUND
+Clean error, no exec
+
+A.6  TS-05: Resource Monitoring
+ID
+Test Case
+Input
+Expected
+Pass Criteria
+T55
+CPU usage tracked per session
+GET /labs/{id}/resources
+200 + cpu_percent, memory_mb
+Values change over time (not static)
+T56
+WS resource_warning on high CPU (>90%)
+Stress container CPU
+resource_warning event with cpu_percent>90
+Event received within 5s of breach
+T57
+Container killed on memory OOM
+Container exceeds 512MB
+status=error, container stopped by Docker
+Docker OOM killer fires, not our code
+T58
+Resource stats stored for audit
+Check DB after running lab
+resource_snapshots table has rows
+cpu_percent + memory_mb + timestamp present
+T59
+Quota check prevents over-provisioning
+Provision when server at 90% capacity
+503 LAB_CAPACITY_FULL
+No new container started
+T60
+Resource API requires ownership
+User A reads user B's resources
+403 FORBIDDEN
+Cannot see other user's resource data
+T61
+Metrics aggregated per course
+GET /admin/metrics?course_id=x
+avg CPU, peak memory, session count
+Admin-only endpoint, correct aggregation
+T62
+Cleanup job runs on schedule
+Wait for cron interval
+Expired container resources freed
+Docker stats no longer show dead containers
+
+A.7  TS-06: Scheduling
+ID
+Test Case
+Input
+Expected
+Pass Criteria
+T63
+Book an available slot
+POST /schedule with open time slot
+201 + booking_id + status=confirmed
+Slot marked reserved in DB
+T64
+Reject booking on taken slot
+Book same slot as T63
+409 SLOT_UNAVAILABLE
+No double booking created
+T65
+Cancel a booking
+DELETE /schedule/{booking_id}
+200 + slot freed
+Slot available again for others
+T66
+Booking in the past rejected
+Schedule slot < now
+400 INVALID_SCHEDULE_TIME
+Validation fires before DB write
+T67
+Auto-provision at scheduled start time
+Wait for booking start_time
+Container provisioned automatically
+session created without user action
+T68
+Notification sent 15min before start
+Check notification service at T-15min
+Email/WS notification sent
+Notification payload has session details
+T69
+User cannot book overlapping slots
+Two bookings same user same time
+409 on second booking
+User-level overlap check works
+T70
+List available slots shows correct availability
+GET /schedule/slots?lab_id=x&date=y
+Slots with taken=true where booked
+T63's slot shows taken=true
+T71
+Booking queue when all slots full
+Book when all slots taken
+202 + position in queue
+Queue position returned, notification promised
+T72
+Queue auto-advances when slot freed
+Cancel T63, check queue
+Next user in queue notified within 30s
+Queue job fires on cancellation
+
+A.8  Validation Execution Order
+✖  Run test suites in this exact order. Each suite depends on the previous passing. Never skip TS-01.
+
+Order
+Suite
+Depends on
+Automated via
+1st
+TS-01 Auth
+Nothing — run first always
+Jest + supertest, isolated DB
+2nd
+TS-02 Provisioning
+TS-01 (needs valid tokens)
+Jest + Docker-in-Docker test env
+3rd
+TS-03 Lifecycle
+TS-02 (needs active sessions)
+Jest + fake timers for TTL tests
+4th
+TS-04 Validation
+TS-02 (needs running container)
+Jest + container exec mock
+5th
+TS-05 Resources
+TS-02 (needs running container)
+Jest + Docker stats mock
+6th
+TS-06 Scheduling
+TS-01 (needs auth), no container needed
+Jest + node-cron mock
+
+ℹ  CI pipeline blocks merge if any TS-01 or TS-02 test fails. TS-03 through TS-06 failures block staging deploy but not feature branches.
+
+ 
+
+  PART B    PROJECT SETUP
+  Tech stack, folder structure, all dependencies, and environment configuration
+
+Part B: Project Setup
+B.1  Tech Stack Decision
+Layer
+Choice
+Reason
+Runtime
+Node.js 20 LTS
+Excellent async I/O, native WebSocket support, Docker SDK mature
+Framework
+Fastify 4
+2x faster than Express, built-in schema validation, TypeScript first
+Language
+TypeScript 5
+Type safety across all services, fewer runtime surprises at 3am
+Database
+PostgreSQL 16
+JSONB for lab configs, strong ACID for session state, excellent indexing
+Cache/TTL
+Redis 7
+Session TTL, heartbeat tracking, pub/sub for real-time events
+Container
+Docker + dockerode
+Direct container management, no k8s overhead for hackathon scope
+Terminal
+ttyd (sidecar)
+Battle-tested, WebSocket PTY, single binary, zero deps
+Ingress
+Traefik v3
+Label-based dynamic routing, auto-TLS, Docker provider built-in
+Queue/Jobs
+BullMQ + Redis
+Lab provisioning queue, cleanup jobs, scheduling jobs
+Auth
+jose (JWT)
+RFC-compliant JWT, EdDSA support, zero dependencies
+Validation
+Zod
+Runtime schema validation, matches TypeScript types 1:1
+ORM
+Drizzle ORM
+Type-safe SQL, zero runtime overhead, great migration tooling
+Testing
+Vitest + supertest
+ESM native, fast, compatible with Fastify testing patterns
+Monitoring
+Prometheus + pino
+Structured logs, metrics scraping, zero overhead in prod
+
+B.2  Folder Structure
+lab-backend/
+├── src/
+│   ├── config/
+│   │   ├── env.ts              # Zod-validated env vars
+│   │   ├── database.ts         # Drizzle + pg pool setup
+│   │   └── redis.ts            # Redis client + pub/sub clients
+│   ├── db/
+│   │   ├── schema/             # All Drizzle table definitions
+│   │   │   ├── users.ts
+│   │   │   ├── sessions.ts
+│   │   │   ├── labs.ts
+│   │   │   ├── steps.ts
+│   │   │   ├── bookings.ts
+│   │   │   └── resources.ts
+│   │   └── migrations/         # Auto-generated SQL migrations
+│   ├── services/
+│   │   ├── auth.service.ts     # JWT issue, verify, refresh
+│   │   ├── orchestrator.service.ts  # Provision, destroy, status
+│   │   ├── container.service.ts     # Docker API wrapper
+│   │   ├── terminal.service.ts      # ttyd sidecar management
+│   │   ├── session.service.ts       # Heartbeat, lifecycle, cleanup
+│   │   ├── validation.service.ts    # Step exec + result
+│   │   ├── resource.service.ts      # Stats collection + quotas
+│   │   ├── scheduler.service.ts     # Slot management + queue
+│   │   └── notification.service.ts  # WS events + email
+│   ├── routes/
+│   │   ├── auth.routes.ts
+│   │   ├── labs.routes.ts
+│   │   ├── catalog.routes.ts
+│   │   ├── schedule.routes.ts
+│   │   └── admin.routes.ts
+│   ├── middleware/
+│   │   ├── authenticate.ts     # JWT verification hook
+│   │   ├── rateLimit.ts        # Per-route rate limiters
+│   │   ├── ownerGuard.ts       # Session ownership check
+│   │   └── errorHandler.ts     # Unified error → HTTP response
+│   ├── jobs/
+│   │   ├── provision.job.ts    # BullMQ worker: spin up container
+│   │   ├── cleanup.job.ts      # BullMQ worker: destroy expired
+│   │   ├── monitor.job.ts      # BullMQ worker: collect stats
+│   │   └── schedule.job.ts     # BullMQ worker: auto-provision
+│   ├── websocket/
+│   │   ├── gateway.ts          # WS server setup + auth
+│   │   └── handlers/
+│   │       ├── session.handler.ts
+│   │       └── heartbeat.handler.ts
+│   ├── types/
+│   │   ├── api.types.ts
+│   │   ├── session.types.ts
+│   │   └── events.types.ts
+│   └── app.ts                  # Fastify app factory
+├── tests/
+│   ├── ts-01-auth.test.ts
+│   ├── ts-02-provision.test.ts
+│   ├── ts-03-lifecycle.test.ts
+│   ├── ts-04-validation.test.ts
+│   ├── ts-05-resources.test.ts
+│   └── ts-06-schedule.test.ts
+├── docker/
+│   ├── docker-compose.dev.yml
+│   ├── docker-compose.prod.yml
+│   └── lab-images/             # Dockerfiles for each lab
+│       ├── k8s-basics/
+│       └── linux-fundamentals/
+├── k8s/                        # Kubernetes manifests (prod)
+├── .env.example
+├── drizzle.config.ts
+├── package.json
+└── tsconfig.json
+
+B.3  Environment Variables (.env)
+# Server
+PORT=3000
+NODE_ENV=development
+BASE_DOMAIN=labs.yourdomain.com
+
+# Database
+DATABASE_URL=postgresql://labuser:password@localhost:5432/labdb
+REDIS_URL=redis://localhost:6379
+
+# Auth
+JWT_SECRET=your-256-bit-secret-here
+JWT_ACCESS_EXPIRES=900         # 15 minutes in seconds
+JWT_REFRESH_EXPIRES=604800     # 7 days
+LAB_TOKEN_EXPIRES=600          # 10 minutes
+
+# Docker
+DOCKER_SOCKET=/var/run/docker.sock
+CONTAINER_NETWORK=lab-network
+CONTAINER_CPU_LIMIT=0.5
+CONTAINER_MEMORY_LIMIT=536870912  # 512MB in bytes
+MAX_ACTIVE_SESSIONS_PER_USER=2
+DEFAULT_SESSION_TTL=3600
+MAX_SESSION_TTL=14400             # 4 hours max
+
+# Traefik
+TRAEFIK_API_URL=http://traefik:8080
+
+# Infra limits
+MAX_TOTAL_ACTIVE_CONTAINERS=50
+CLEANUP_INTERVAL_MS=60000
+MONITOR_INTERVAL_MS=10000
+
+# Notifications
+SMTP_HOST=smtp.yourdomain.com
+SMTP_PORT=587
+SMTP_USER=noreply@yourdomain.com
+SMTP_PASS=your-smtp-password
+
+ 
+
+  PART C    DATABASE DESIGN
+  PostgreSQL schemas, Redis key patterns, indexes, and migration strategy
+
+Part C: Database Design
+C.1  PostgreSQL Schema
+users
+CREATE TABLE users (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  email       TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  name        TEXT NOT NULL,
+  role        TEXT NOT NULL DEFAULT 'student',  -- student | instructor | admin
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_login  TIMESTAMPTZ
+);
+CREATE INDEX idx_users_email ON users(email);
+
+labs (catalog)
+CREATE TABLE labs (
+  id                TEXT PRIMARY KEY,   -- e.g. 'k8s-basics-01'
+  title             TEXT NOT NULL,
+  description       TEXT,
+  difficulty        TEXT NOT NULL,      -- beginner | intermediate | hard
+  category          TEXT NOT NULL,
+  docker_image      TEXT NOT NULL,
+  init_script       TEXT,
+  estimated_minutes INT NOT NULL DEFAULT 30,
+  ttl_seconds       INT NOT NULL DEFAULT 3600,
+  cpu_limit         REAL NOT NULL DEFAULT 0.5,
+  memory_limit_mb   INT NOT NULL DEFAULT 512,
+  expose_port       INT NOT NULL DEFAULT 7681,
+  tags              TEXT[] DEFAULT '{}',
+  steps             JSONB NOT NULL DEFAULT '[]',
+  resources         JSONB NOT NULL DEFAULT '[]',
+  is_active         BOOLEAN NOT NULL DEFAULT true,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+sessions
+CREATE TABLE sessions (
+  id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id          UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  lab_id           TEXT NOT NULL REFERENCES labs(id),
+  status           TEXT NOT NULL DEFAULT 'provisioning',
+                   -- provisioning | ready | error | expired | destroyed
+  container_id     TEXT,          -- Docker container ID
+  subdomain        TEXT UNIQUE,   -- e.g. sess-abc123
+  terminal_url     TEXT,
+  error_message    TEXT,
+  ttl_seconds      INT NOT NULL,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  ready_at         TIMESTAMPTZ,
+  expires_at       TIMESTAMPTZ NOT NULL,
+  ended_at         TIMESTAMPTZ
+);
+CREATE INDEX idx_sessions_user_id ON sessions(user_id);
+CREATE INDEX idx_sessions_status ON sessions(status);
+CREATE INDEX idx_sessions_expires_at ON sessions(expires_at);
+CREATE INDEX idx_sessions_subdomain ON sessions(subdomain);
+
+step_progress
+CREATE TABLE step_progress (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  session_id   UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  step_id      TEXT NOT NULL,
+  status       TEXT NOT NULL DEFAULT 'pending',  -- pending | passed | failed
+  validated_at TIMESTAMPTZ,
+  attempts     INT NOT NULL DEFAULT 0,
+  hint_shown   BOOLEAN NOT NULL DEFAULT false,
+  UNIQUE(session_id, step_id)
+);
+CREATE INDEX idx_step_progress_session ON step_progress(session_id);
+
+resource_snapshots
+CREATE TABLE resource_snapshots (
+  id            BIGSERIAL PRIMARY KEY,
+  session_id    UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  cpu_percent   REAL NOT NULL,
+  memory_mb     REAL NOT NULL,
+  recorded_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX idx_resources_session ON resource_snapshots(session_id, recorded_at DESC);
+-- Partition by month in production for large datasets
+
+bookings
+CREATE TABLE bookings (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id      UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  lab_id       TEXT NOT NULL REFERENCES labs(id),
+  slot_start   TIMESTAMPTZ NOT NULL,
+  slot_end     TIMESTAMPTZ NOT NULL,
+  status       TEXT NOT NULL DEFAULT 'confirmed',
+               -- confirmed | cancelled | completed | queued
+  session_id   UUID REFERENCES sessions(id),  -- set when auto-provisioned
+  queue_pos    INT,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  notified_at  TIMESTAMPTZ
+);
+CREATE INDEX idx_bookings_user ON bookings(user_id);
+CREATE INDEX idx_bookings_slot ON bookings(lab_id, slot_start, slot_end);
+CREATE INDEX idx_bookings_start ON bookings(slot_start) WHERE status = 'confirmed';
+
+-- Prevent double booking at DB level
+CREATE UNIQUE INDEX idx_bookings_no_overlap
+  ON bookings(lab_id, slot_start)
+  WHERE status IN ('confirmed', 'queued');
+
+C.2  Redis Key Patterns
+Key Pattern
+TTL
+Purpose
+session:{sessionId}:alive
+= session TTL
+Heartbeat key — deletion triggers expiry cleanup
+session:{sessionId}:token
+600s
+Current embed token hash for validation
+user:{userId}:active_sessions
+No TTL (set)
+Set of active session IDs for quota check
+provision:lock:{userId}:{labId}
+30s
+Mutex preventing duplicate provision requests
+rate:login:{ip}
+60s
+Login attempt counter per IP
+rate:api:{userId}
+60s
+General API rate limit counter
+ws:channel:{sessionId}
+= session TTL
+Redis pub/sub channel for WS event fanout
+booking:lock:{labId}:{slotStart}
+10s
+Mutex for concurrent slot booking
+server:capacity
+No TTL
+Current active container count for capacity checks
+
+ 
+
+  PART D    CORE SERVICES
+  Detailed implementation of every service module
+
+Part D: Core Services
+D.1  Auth Service
+Handles JWT issuance for API access and separate short-lived tokens for terminal embeds. Uses two signing keys — RS256 for API tokens (verifiable without secret), HS256 for embed tokens (faster, symmetric).
+
+// src/services/auth.service.ts (key functions)
+
+export async function issueTokenPair(userId: string) {
+  const accessToken = await new SignJWT({ sub: userId, type: 'access' })
+    .setProtectedHeader({ alg: 'HS256' })
+    .setExpirationTime('15m')
+    .setIssuedAt()
+    .sign(ACCESS_SECRET);
+
+  const refreshToken = await new SignJWT({ sub: userId, type: 'refresh', jti: nanoid() })
+    .setProtectedHeader({ alg: 'HS256' })
+    .setExpirationTime('7d')
+    .setIssuedAt()
+    .sign(REFRESH_SECRET);
+
+  // Store refresh token JTI in Redis for revocation
+  await redis.setex(`refresh:${userId}:${jti}`, 604800, '1');
+  return { accessToken, refreshToken };
+}
+
+export async function issueEmbedToken(sessionId: string, userId: string) {
+  // Embed token is SCOPED — cannot be used for API calls
+  return new SignJWT({ sub: userId, session: sessionId, type: 'embed' })
+    .setProtectedHeader({ alg: 'HS256' })
+    .setExpirationTime('10m')
+    .setIssuedAt()
+    .sign(EMBED_SECRET);  // Different secret from API tokens
+}
+
+export async function verifyAccessToken(token: string) {
+  const { payload } = await jwtVerify(token, ACCESS_SECRET);
+  if (payload.type !== 'access') throw new UnauthorizedError();
+  return payload;
+}
+
+D.2  Lab Orchestrator Service
+The heart of the system. Manages the full provision → ready → destroy lifecycle. Uses a BullMQ queue to prevent blocking the API thread during container startup.
+
+// src/services/orchestrator.service.ts
+
+export async function provisionLab(userId: string, labId: string) {
+  // 1. Check quota
+  const activeCount = await redis.scard(`user:${userId}:active_sessions`);
+  if (activeCount >= MAX_SESSIONS_PER_USER) throw new QuotaExceededError();
+
+  // 2. Check for existing session (idempotency)
+  const existing = await db.query.sessions.findFirst({
+    where: and(eq(sessions.userId, userId), eq(sessions.labId, labId),
+               inArray(sessions.status, ['provisioning', 'ready']))
+  });
+  if (existing) throw new LabAlreadyRunningError(existing.id);
+
+  // 3. Acquire provision lock (prevent race condition)
+  const lockKey = `provision:lock:${userId}:${labId}`;
+  const locked = await redis.set(lockKey, '1', 'EX', 30, 'NX');
+  if (!locked) throw new LabAlreadyRunningError();
+
+  // 4. Create session record
+  const session = await db.insert(sessions).values({
+    userId, labId, status: 'provisioning',
+    ttlSeconds: lab.ttlSeconds,
+    expiresAt: new Date(Date.now() + lab.ttlSeconds * 1000)
+  }).returning();
+
+  // 5. Add to provision queue (non-blocking)
+  await provisionQueue.add('provision', { sessionId: session.id, labId, userId });
+
+  return session;
+}
+
+// BullMQ Worker — runs in separate process
+provisionWorker.process(async (job) => {
+  const { sessionId, labId, userId } = job.data;
+  const lab = await getLab(labId);
+
+  // 1. Start container
+  const subdomain = `sess-${nanoid(8).toLowerCase()}`;
+  const container = await containerService.start({
+    image: lab.dockerImage,
+    subdomain,
+    cpuLimit: lab.cpuLimit,
+    memoryLimit: lab.memoryLimitMb * 1024 * 1024,
+    labels: { 'lab.session': sessionId, 'lab.user': userId }
+  });
+
+  // 2. Run init script if defined
+  if (lab.initScript) {
+    await containerService.exec(container.id, lab.initScript, { timeout: 30000 });
+  }
+
+  // 3. Wait for ttyd to be ready (health check)
+  await waitForPort(subdomain, lab.exposePort, 30000);
+
+  // 4. Issue embed token, build terminal URL
+  const embedToken = await authService.issueEmbedToken(sessionId, userId);
+  const terminalUrl = `https://${subdomain}.${BASE_DOMAIN}/terminal?token=${embedToken}`;
+
+  // 5. Register Traefik route
+  await traefikService.registerRoute(subdomain, container.id);
+
+  // 6. Update session to ready
+  await db.update(sessions).set({
+    status: 'ready', containerId: container.id,
+    subdomain, terminalUrl, readyAt: new Date()
+  }).where(eq(sessions.id, sessionId));
+
+  // 7. Set Redis heartbeat key
+  await redis.setex(`session:${sessionId}:alive`, lab.ttlSeconds, '1');
+  await redis.sadd(`user:${userId}:active_sessions`, sessionId);
+
+  // 8. Emit WebSocket event to frontend
+  await eventService.emit(sessionId, { type: 'session_ready', terminalUrl });
+});
+
+D.3  Container Service (Docker wrapper)
+// src/services/container.service.ts
+
+export async function startContainer(opts: ContainerOpts) {
+  const docker = new Dockerode({ socketPath: DOCKER_SOCKET });
+
+  const container = await docker.createContainer({
+    Image: opts.image,
+    name: `lab-${opts.subdomain}`,
+    Hostname: opts.subdomain,
+    ExposedPorts: { [`${opts.port}/tcp`]: {} },
+    Labels: {
+      'traefik.enable': 'true',
+      [`traefik.http.routers.${opts.subdomain}.rule`]: `Host("${opts.subdomain}.${BASE_DOMAIN}")`,
+      [`traefik.http.services.${opts.subdomain}.loadbalancer.server.port`]: `${opts.port}`,
+      'lab.managed': 'true',
+      'lab.session': opts.sessionId,
+      'lab.user': opts.userId,
+    },
+    HostConfig: {
+      NanoCpus: Math.floor(opts.cpuLimit * 1e9),
+      Memory: opts.memoryLimit,
+      NetworkMode: CONTAINER_NETWORK,
+      AutoRemove: false,    // We manage cleanup explicitly
+      ReadonlyRootfs: false,
+      CapDrop: ['ALL'],     // Drop all capabilities
+      CapAdd: ['CHOWN', 'SETUID', 'SETGID'],  // Only what's needed
+      SecurityOpt: ['no-new-privileges:true'],
+    }
+  });
+
+  await container.start();
+  return container;
+}
+
+export async function execInContainer(containerId: string, cmd: string, timeoutMs = 10000) {
+  const container = docker.getContainer(containerId);
+  const exec = await container.exec({
+    Cmd: ['/bin/sh', '-c', cmd],
+    AttachStdout: true,
+    AttachStderr: true,
+  });
+
+  return Promise.race([
+    exec.start({ hijack: true, stdin: false }),
+    new Promise((_, rej) => setTimeout(() => rej(new ValidationTimeoutError()), timeoutMs))
+  ]);
+}
+
+D.4  Session Service (Heartbeat & Lifecycle)
+// src/services/session.service.ts
+
+export async function heartbeat(sessionId: string, userId: string) {
+  // Verify ownership
+  const session = await getSessionOrThrow(sessionId, userId);
+
+  // Reset Redis TTL
+  const ttl = session.ttlSeconds;
+  await redis.expire(`session:${sessionId}:alive`, ttl);
+
+  // Update DB expires_at
+  const newExpiry = new Date(Date.now() + ttl * 1000);
+  await db.update(sessions).set({ expiresAt: newExpiry })
+    .where(eq(sessions.id, sessionId));
+
+  return { timeRemainingSeconds: ttl, status: session.status };
+}
+
+// Redis keyspace notification triggers this when session key expires
+export async function onSessionExpired(sessionId: string) {
+  const session = await db.query.sessions.findFirst({
+    where: eq(sessions.id, sessionId)
+  });
+  if (!session || session.status !== 'ready') return;
+
+  // Destroy container
+  await containerService.destroyContainer(session.containerId);
+  await traefikService.removeRoute(session.subdomain);
+
+  // Update DB
+  await db.update(sessions).set({ status: 'expired', endedAt: new Date() })
+    .where(eq(sessions.id, sessionId));
+
+  // Clean up Redis
+  await redis.srem(`user:${session.userId}:active_sessions`, sessionId);
+
+  // Notify frontend
+  await eventService.emit(sessionId, { type: 'session_expired', reason: 'ttl_reached' });
+}
+
+ 
+
+  PART E    API LAYER
+  All routes, request/response schemas, middleware, and error handling
+
+Part E: API Layer
+E.1  Route Map
+Method
+Path
+Auth
+Handler summary
+POST
+/auth/login
+None
+Validate credentials, issue token pair, set refresh cookie
+POST
+/auth/refresh
+Cookie
+Verify refresh token, issue new access token
+POST
+/auth/logout
+Bearer
+Revoke refresh token JTI from Redis
+POST
+/labs/provision
+Bearer
+Queue provision job, return 202 + session
+GET
+/labs/:id/status
+Bearer
+Return session status + terminal_url if ready
+POST
+/labs/:id/heartbeat
+Bearer
+Reset session TTL, return time_remaining
+POST
+/labs/:id/extend
+Bearer
+Extend session by requested seconds (max 4h total)
+DELETE
+/labs/:id
+Bearer
+Destroy container, update DB, emit WS event
+POST
+/labs/:id/validate/:stepId
+Bearer
+Exec validation script, return pass/fail + hint
+GET
+/labs/:id/progress
+Bearer
+Return all step statuses for session
+GET
+/labs/:id/resources
+Bearer
+Return latest CPU/memory snapshot
+GET
+/labs/sessions
+Bearer
+List user's sessions (filter by status)
+GET
+/catalog/labs
+Bearer
+Paginated lab list with filters
+GET
+/catalog/labs/:labId
+Bearer
+Full lab definition with steps + resources
+GET
+/schedule/slots
+Bearer
+Available slots for a lab on a date
+POST
+/schedule/book
+Bearer
+Book a slot or join queue
+DELETE
+/schedule/:bookingId
+Bearer
+Cancel booking, free slot, advance queue
+GET
+/schedule/my-bookings
+Bearer
+User's upcoming + past bookings
+GET
+/admin/metrics
+Admin JWT
+Aggregate resource + usage stats
+WS
+/ws/v1/labs/:id/events
+WS subprotocol
+Real-time event channel per session
+
+E.2  Request Validation (Zod schemas)
+// src/routes/labs.routes.ts — Provision endpoint with full schema
+
+const ProvisionBodySchema = z.object({
+  lab_id: z.string().min(1).max(100).regex(/^[a-z0-9-]+$/),
+  course_id: z.string().optional(),
+  options: z.object({
+    persist_on_exit: z.boolean().default(false),
+    preferred_region: z.enum(['us-east', 'us-west', 'eu-west']).optional()
+  }).optional()
+});
+
+fastify.post('/labs/provision',
+  { preHandler: [authenticate], schema: { body: zodToJsonSchema(ProvisionBodySchema) } },
+  async (req, reply) => {
+    const body = ProvisionBodySchema.parse(req.body);
+    const session = await orchestratorService.provisionLab(req.user.sub, body.lab_id);
+    reply.code(202).send({
+      session_id: session.id,
+      status: session.status,
+      terminal_url: null,
+      estimated_ready_seconds: 12,
+      ttl_seconds: session.ttlSeconds,
+      created_at: session.createdAt,
+      expires_at: session.expiresAt,
+    });
+  }
+);
+
+E.3  Unified Error Handler
+// src/middleware/errorHandler.ts
+
+const ERROR_MAP: Record<string, [number, string]> = {
+  UnauthorizedError:         [401, 'UNAUTHORIZED'],
+  TokenExpiredError:         [401, 'TOKEN_EXPIRED'],
+  RefreshExpiredError:       [401, 'REFRESH_EXPIRED'],
+  ForbiddenError:            [403, 'FORBIDDEN'],
+  LabNotFoundError:          [404, 'LAB_NOT_FOUND'],
+  SessionNotFoundError:      [404, 'SESSION_NOT_FOUND'],
+  StepNotFoundError:         [404, 'STEP_NOT_FOUND'],
+  LabAlreadyRunningError:    [409, 'LAB_ALREADY_RUNNING'],
+  SlotUnavailableError:      [409, 'SLOT_UNAVAILABLE'],
+  QuotaExceededError:        [429, 'QUOTA_EXCEEDED'],
+  RateLimitError:            [429, 'RATE_LIMITED'],
+  ValidationTimeoutError:    [504, 'VALIDATION_TIMEOUT'],
+  LabCapacityFullError:      [503, 'LAB_CAPACITY_FULL'],
+  ExtendLimitExceededError:  [400, 'EXTEND_LIMIT_EXCEEDED'],
+};
+
+fastify.setErrorHandler((error, req, reply) => {
+  const [status, code] = ERROR_MAP[error.constructor.name] ?? [500, 'INTERNAL_ERROR'];
+  reply.status(status).send({
+    error: { code, message: error.message, http_status: status }
+  });
+  if (status === 500) log.error({ err: error, path: req.url }, 'Unhandled error');
+});
+
+ 
+
+  PART F    WEBSOCKET & REAL-TIME
+  Event gateway, pub/sub architecture, token refresh push
+
+Part F: WebSocket & Real-time
+F.1  Architecture
+The WS gateway uses Redis pub/sub so that events emitted from BullMQ workers (which run in separate processes) reach the client's WS connection on the API server. One Redis channel per session.
+
+// src/websocket/gateway.ts
+
+fastify.register(async (fastify) => {
+  fastify.get('/ws/v1/labs/:sessionId/events', { websocket: true },
+    async (socket, req) => {
+      const { sessionId } = req.params;
+
+      // Authenticate via subprotocol token
+      const token = req.headers['sec-websocket-protocol']?.split(', ')[1];
+      const user = await authService.verifyAccessToken(token).catch(() => null);
+      if (!user) return socket.close(4001, 'Unauthorized');
+
+      // Verify session ownership
+      const session = await getSession(sessionId);
+      if (!session || session.userId !== user.sub) return socket.close(4003, 'Forbidden');
+
+      // Subscribe to Redis channel
+      const subscriber = redis.duplicate();
+      await subscriber.subscribe(`ws:channel:${sessionId}`);
+
+      subscriber.on('message', (channel, message) => {
+        if (socket.readyState === WebSocket.OPEN) socket.send(message);
+      });
+
+      socket.on('close', () => subscriber.unsubscribe().then(() => subscriber.quit()));
+    }
+  );
+});
+
+// From any service or worker — emit event to all connected clients
+export async function emitEvent(sessionId: string, event: LabEvent) {
+  await redis.publish(`ws:channel:${sessionId}`, JSON.stringify(event));
+}
+
+F.2  Token Refresh Push
+Embed tokens expire in 10 minutes. A BullMQ job runs 9 minutes after each session goes ready, issues a fresh embed token, and pushes it to the frontend via WebSocket. The frontend updates the iframe src.
+
+// Scheduled when session becomes ready:
+await tokenRefreshQueue.add('refresh-embed-token',
+  { sessionId, userId },
+  { delay: 9 * 60 * 1000, repeat: { every: 9 * 60 * 1000 } }
+);
+
+tokenRefreshWorker.process(async (job) => {
+  const { sessionId, userId } = job.data;
+  const session = await getSession(sessionId);
+  if (!session || session.status !== 'ready') return;  // Session gone, skip
+
+  const newToken = await authService.issueEmbedToken(sessionId, userId);
+  const newUrl = `https://${session.subdomain}.${BASE_DOMAIN}/terminal?token=${newToken}`;
+
+  // Update DB
+  await db.update(sessions).set({ terminalUrl: newUrl }).where(eq(sessions.id, sessionId));
+
+  // Push to frontend
+  await emitEvent(sessionId, { type: 'token_refresh', terminal_url: newUrl });
+});
+
+ 
+
+  PART G    RESOURCE MONITORING
+  Real-time CPU/memory tracking, quota enforcement, auto-cleanup
+
+Part G: Resource Monitoring
+G.1  Stats Collection
+A BullMQ repeating job polls Docker stats every 10 seconds for all active containers. Docker's stats API streams CPU and memory data. We store snapshots in PostgreSQL and cache the latest in Redis for low-latency API reads.
+
+// src/jobs/monitor.job.ts
+
+monitorWorker.process(async () => {
+  const activeSessions = await db.query.sessions.findMany({
+    where: eq(sessions.status, 'ready'),
+    columns: { id: true, containerId: true, userId: true }
+  });
+
+  await Promise.all(activeSessions.map(async (session) => {
+    const stats = await docker.getContainer(session.containerId).stats({ stream: false });
+
+    // Calculate CPU % from Docker stats delta
+    const cpuDelta = stats.cpu_stats.cpu_usage.total_usage
+                   - stats.precpu_stats.cpu_usage.total_usage;
+    const systemDelta = stats.cpu_stats.system_cpu_usage
+                      - stats.precpu_stats.system_cpu_usage;
+    const cpuPercent = (cpuDelta / systemDelta) * stats.cpu_stats.online_cpus * 100;
+
+    const memoryMb = stats.memory_stats.usage / (1024 * 1024);
+
+    // Store snapshot
+    await db.insert(resourceSnapshots).values({
+      sessionId: session.id, cpuPercent, memoryMb
+    });
+
+    // Cache latest
+    await redis.setex(`resource:${session.id}:latest`, 30,
+      JSON.stringify({ cpuPercent, memoryMb, recordedAt: new Date() }));
+
+    // Warn on high CPU
+    if (cpuPercent > 90) {
+      await emitEvent(session.id, {
+        type: 'resource_warning', cpu_percent: cpuPercent, memory_mb: memoryMb
+      });
+    }
+  }));
+});
+
+G.2  Quota Enforcement
+Check
+Implementation
+Per-user active session limit
+Redis SCARD on user:{id}:active_sessions before provision
+Per-server container capacity
+Redis INCR/DECR on server:capacity key with atomic check
+Container memory hard limit
+Docker HostConfig.Memory — Docker OOM killer enforces this
+Container CPU soft limit
+Docker HostConfig.NanoCpus — throttles, does not kill
+Booking slot conflicts
+PostgreSQL unique partial index prevents double-booking at DB level
+Provision rate limit
+Redis-based sliding window: max 5 provisions per user per hour
+
+ 
+
+  PART H    SCHEDULING SYSTEM
+  Slot booking, conflict detection, auto-provisioning, queue
+
+Part H: Scheduling System
+H.1  Booking Flow
+// src/services/scheduler.service.ts
+
+export async function bookSlot(userId: string, labId: string,
+                                slotStart: Date, slotEnd: Date) {
+  // 1. Validate time (not in past, within booking window)
+  if (slotStart <= new Date()) throw new InvalidScheduleTimeError();
+  if (slotStart > addDays(new Date(), 14)) throw new TooFarInFutureError();
+
+  // 2. Check user overlap
+  const userOverlap = await db.query.bookings.findFirst({
+    where: and(
+      eq(bookings.userId, userId),
+      inArray(bookings.status, ['confirmed']),
+      lte(bookings.slotStart, slotEnd),
+      gte(bookings.slotEnd, slotStart)
+    )
+  });
+  if (userOverlap) throw new SlotOverlapError();
+
+  // 3. Acquire slot lock (prevents race condition on booking)
+  const lockKey = `booking:lock:${labId}:${slotStart.getTime()}`;
+  const locked = await redis.set(lockKey, userId, 'EX', 10, 'NX');
+
+  if (!locked) {
+    // Slot being booked concurrently — add to queue
+    const queuePos = await addToQueue(userId, labId, slotStart, slotEnd);
+    return { status: 'queued', queuePosition: queuePos };
+  }
+
+  try {
+    // 4. Create booking
+    const booking = await db.insert(bookings).values({
+      userId, labId, slotStart, slotEnd, status: 'confirmed'
+    }).returning();
+
+    // 5. Schedule auto-provision job
+    await scheduleQueue.add('auto-provision',
+      { bookingId: booking.id, userId, labId },
+      { delay: slotStart.getTime() - Date.now() - 5000 }  // 5s before start
+    );
+
+    // 6. Schedule 15-min reminder
+    const reminderDelay = slotStart.getTime() - Date.now() - (15 * 60 * 1000);
+    if (reminderDelay > 0) {
+      await notificationQueue.add('reminder',
+        { bookingId: booking.id, userId },
+        { delay: reminderDelay }
+      );
+    }
+
+    return { status: 'confirmed', bookingId: booking.id };
+  } finally {
+    await redis.del(lockKey);
+  }
+}
+
+ 
+
+  PART I    SECURITY & HARDENING
+  Container isolation, secrets, CORS, audit logging
+
+Part I: Security & Hardening
+I.1  Container Isolation Model
+Threat
+Mitigation
+Container escape (privileged breakout)
+CapDrop ALL, no-new-privileges, non-root user inside container
+Network lateral movement between labs
+All containers on isolated Docker network, no inter-container DNS
+User A accessing User B's terminal
+Embed token scoped to session_id — wrong session = 403
+Persistent malicious files after session
+Container destroyed + Docker volumes removed on session end
+Exec injection via validation scripts
+Scripts are pre-defined in lab catalog — no user input in exec cmd
+DoS via CPU/memory exhaustion
+Docker resource limits hard-enforced by cgroups, not software
+Token leakage via URL logs
+Embed token in query param — ensure access logs redact ?token= values
+SSRF via terminal to internal APIs
+Containers not on host network; internal services unreachable from lab network
+
+I.2  Audit Log
+// Every sensitive action writes a structured log via pino:
+log.info({
+  event: 'lab.provision',
+  userId, labId, sessionId,
+  ip: req.ip, userAgent: req.headers['user-agent'],
+  timestamp: new Date().toISOString()
+}, 'Lab provisioned');
+
+// Events to audit:
+// auth.login, auth.login_failed, auth.logout
+// lab.provision, lab.destroy, lab.expire
+// validation.exec, validation.passed, validation.failed
+// booking.created, booking.cancelled
+// admin.metrics_accessed
+
+I.3  CORS & Headers
+fastify.register(cors, {
+  origin: ['https://yourdomain.com', 'https://staging.yourdomain.com'],
+  methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Authorization', 'Content-Type'],
+  credentials: true
+});
+
+// Security headers via @fastify/helmet
+fastify.register(helmet, {
+  contentSecurityPolicy: {
+    directives: {
+      frameAncestors: ["'self'"],   // prevent clickjacking
+      frameAncestors: ['https://yourdomain.com'],
+    }
+  }
+});
+
+ 
+
+  PART J    DEPLOYMENT
+  Docker Compose for development, Kubernetes for production, CI/CD pipeline
+
+Part J: Deployment
+J.1  Docker Compose (Development)
+# docker/docker-compose.dev.yml
+version: '3.9'
+services:
+  api:
+    build: . 
+    ports: ['3000:3000']
+    volumes:
+      - ./src:/app/src
+      - /var/run/docker.sock:/var/run/docker.sock  # Docker-in-Docker access
+    env_file: .env.dev
+    depends_on: [postgres, redis, traefik]
+
+  worker:
+    build: .
+    command: node dist/worker.js
+    volumes: [/var/run/docker.sock:/var/run/docker.sock]
+    env_file: .env.dev
+    depends_on: [postgres, redis]
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: labdb
+      POSTGRES_USER: labuser
+      POSTGRES_PASSWORD: devpassword
+    volumes: [pgdata:/var/lib/postgresql/data]
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --notify-keyspace-events KEA  # Enable keyspace events for TTL
+
+  traefik:
+    image: traefik:v3.0
+    command:
+      - --api.insecure=true
+      - --providers.docker=true
+      - --providers.docker.network=lab-network
+      - --entrypoints.web.address=:80
+    ports: ['80:80', '8080:8080']
+    volumes: [/var/run/docker.sock:/var/run/docker.sock]
+
+volumes:
+  pgdata:
+networks:
+  default:
+    name: lab-network
+
+J.2  CI/CD Pipeline
+# .github/workflows/ci.yml
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres: { image: postgres:16, env: { POSTGRES_PASSWORD: test } }
+      redis: { image: redis:7 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: npm ci
+      - run: npm run db:migrate
+      - run: npm run test:ts01  # Auth tests FIRST
+      - run: npm run test:ts02  # Provision (requires Docker)
+      - run: npm run test       # All remaining
+      - run: npm run build
+
+  deploy-staging:
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - run: docker build -t registry/lab-backend:${{ github.sha }} .
+      - run: docker push registry/lab-backend:${{ github.sha }}
+      - run: kubectl set image deployment/lab-api api=registry/lab-backend:${{ github.sha }}
+
+J.3  Production Kubernetes (abbreviated)
+# k8s/api-deployment.yaml (key sections)
+spec:
+  replicas: 2
+  template:
+    spec:
+      containers:
+        - name: api
+          image: registry/lab-backend:latest
+          resources:
+            requests: { cpu: '250m', memory: '256Mi' }
+            limits:   { cpu: '500m', memory: '512Mi' }
+          livenessProbe:
+            httpGet: { path: /health, port: 3000 }
+            initialDelaySeconds: 10
+          readinessProbe:
+            httpGet: { path: /ready, port: 3000 }
+          env:
+            - name: DATABASE_URL
+              valueFrom: { secretKeyRef: { name: lab-secrets, key: database-url } }
+
+J.4  Health & Readiness Endpoints
+// GET /health  — liveness probe (is process alive?)
+fastify.get("/health", () => ({ status: "ok", uptime: process.uptime() }));
+
+// GET /ready  — readiness probe (can serve traffic?)
+fastify.get("/ready", async () => {
+  await db.execute(sql`SELECT 1`);  // Check DB
+  await redis.ping();               // Check Redis
+  return { status: "ready" };
+});
+
+
+
+End of Document  ·  72 validation tests  ·  10 implementation parts  ·  CODE-A-HAUNT 3.0

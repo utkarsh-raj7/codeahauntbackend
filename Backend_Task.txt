@@ -1,0 +1,508 @@
+
+Backend Task Assignment
+Cloud-Based Lab Management — Code-A-Haunt 3.0
+Two-person split  •  Dependency-ordered  •  Antigravity/Gemini compatible
+
+
+
+Team Assignments Overview
+
+Module
+Person 1  (Cloud + DevOps)
+Person 2  (Fullstack + DevOps)
+Repo setup & TypeScript toolchain
+Primary
+Assist
+Docker Compose (dev environment)
+Primary
+Review
+PostgreSQL schema + Drizzle migrations
+Assist
+Primary
+Redis config + keyspace TTL events
+Primary
+Assist
+Traefik dynamic subdomain routing
+Primary
+Review
+Fastify app skeleton + health endpoints
+Primary
+Review
+Auth service — JWT, refresh, embed tokens
+Review
+Primary
+Auth routes + rate limiting
+Review
+Primary
+Middleware (authenticate, ownerGuard, errors)
+Assist
+Primary
+Docker API wrapper (container.service.ts)
+Primary
+Review
+Traefik label injection on containers
+Primary
+Review
+ttyd Dockerfile + lab images
+Primary
+Review
+Lab Orchestrator (provision + destroy)
+Co-owner
+Co-owner
+BullMQ provision + cleanup jobs
+Primary
+Assist
+Session lifecycle service + heartbeat
+Primary
+Assist
+All REST API route handlers
+Review
+Primary
+WebSocket gateway + event system
+Assist
+Primary
+Step validation engine
+Assist
+Primary
+Resource monitoring + quota enforcement
+Primary
+Assist
+Session scheduling system
+Assist
+Primary
+Container security hardening
+Primary
+Shared
+GitHub Actions CI/CD pipeline
+Primary
+Assist
+Kubernetes manifests (prod)
+Primary
+Review
+TS-01 Auth tests
+Review
+Primary
+TS-02 Provisioning tests
+Primary
+Assist
+TS-03 Lifecycle tests
+Assist
+Primary
+TS-04 Validation tests
+Assist
+Primary
+TS-05 Resource monitoring tests
+Primary
+Assist
+TS-06 Scheduling tests
+Assist
+Primary
+
+ℹ  Primary = owns the code, makes decisions. Co-owner = write together. Assist = help on request. Review = must approve PR before merge.
+⚠  Respect the dependency order. Person 2 cannot implement Phase 5 API routes until Person 1's Phase 1 handoff is complete and verified. Skipping this guarantee causes broken imports and merge conflicts.
+
+
+Person 1
+Cloud Engineer + DevOps — Infrastructure, Containers, Runtime, CI/CD, Monitoring
+
+Your role is to make the ground solid. Every route Person 2 writes runs on infrastructure you control. If Docker doesn't work, nothing works. Prioritise correctness over speed — one broken container.service.ts breaks the entire system.
+
+PHASE 1 — Foundation  (Do This First. Blocks All Other Work.)
+ℹ  When this phase is done, run the handoff checklist at the bottom of this section. Only then does Person 2 start Phase 5.
+
+1.1  Repository & Toolchain
+	•	Create GitHub repo. Add .gitignore: node_modules/, dist/, .env
+	•	npm init -y. Install TypeScript 5, tsx, ts-node, @types/node
+	•	Create tsconfig.json: strict true, target ES2022, moduleResolution bundler, outDir dist
+	•	Install and configure ESLint + Prettier with @typescript-eslint/recommended rules
+	•	Create .env.example with ALL variables from Part B.3 of backend plan — no real values
+	•	Create every folder in the Part B.2 structure with empty index.ts files
+	•	Add npm scripts: dev, build, lint, test, db:migrate, db:seed
+	•	Push to main. Protect main branch: require 1 PR review before merge
+
+1.2  Docker Compose Dev Environment
+	•	Create docker/docker-compose.dev.yml — exactly matching Part J.1 of backend plan
+	•	  postgres:16-alpine — POSTGRES_DB=labdb, POSTGRES_USER=labuser, volume pgdata
+	•	  redis:7-alpine — command: redis-server --notify-keyspace-events KEA  (CRITICAL for TTL events)
+	•	  traefik:v3.0 — providers.docker=true, entrypoints web:80, dashboard on 8080
+	•	  api service — mount /var/run/docker.sock, env_file .env.dev, depends_on all three
+	•	  worker service — same docker.sock mount, runs node dist/worker.js
+	•	  Create named network 'lab-network'. ALL containers join this network
+	•	Verify: docker compose up — all services start, no exit codes
+	•	Verify: Traefik dashboard at http://localhost:8080 accessible
+	•	Verify: psql -h localhost -U labuser labdb connects successfully
+	•	Verify: redis-cli PING returns PONG
+
+1.3  PostgreSQL Schema & Drizzle Migrations
+	•	Install: drizzle-orm, drizzle-kit, postgres (pg driver)
+	•	Create src/config/database.ts — Drizzle Pool from DATABASE_URL env var
+	•	Create src/db/schema/users.ts — users table from Part C.1 exactly
+	•	Create src/db/schema/labs.ts — labs catalog table with all columns including JSONB steps/resources
+	•	Create src/db/schema/sessions.ts — sessions table with ALL 4 indexes (user_id, status, expires_at, subdomain)
+	•	Create src/db/schema/steps.ts — step_progress with UNIQUE(session_id, step_id) constraint
+	•	Create src/db/schema/resources.ts — resource_snapshots with BIGSERIAL and composite index
+	•	Create src/db/schema/bookings.ts — bookings with slot_start/slot_end and overlap constraint
+	•	Create drizzle.config.ts pointing at src/db/schema/
+	•	Run: npx drizzle-kit generate — confirm 6 migration files created
+	•	Run: npx drizzle-kit migrate — confirm all 6 tables in postgres
+	•	Create db:seed script inserting 2 labs: k8s-basics-01, linux-basics-01
+	•	Share DB connection string in team channel — Person 2 needs this
+
+1.4  Redis Configuration
+	•	Install ioredis, @types/ioredis (if not bundled)
+	•	Create src/config/redis.ts — export redisClient (commands) and redisSub (subscriber) — TWO separate instances
+	•	In redis.ts: redisSub.subscribe('__keyevent@0__:expired') to listen for TTL expiry events
+	•	Write handler: on sess:{sessionId} key expiry → enqueue BullMQ cleanup job for that session
+	•	Smoke test: SET sess:test EX 3, wait 4s, confirm expiry event logged to console
+
+1.5  Fastify App Skeleton
+	•	Install: fastify@4, @fastify/cors, @fastify/helmet, @fastify/websocket, @fastify/rate-limit
+	•	Create src/app.ts — Fastify app factory: register all plugins, return configured app
+	•	CORS: allow origin = FRONTEND_URL env var only. Never '*'
+	•	Helmet: frameAncestors = ['self', FRONTEND_URL]. Protects against clickjacking
+	•	Create src/server.ts — call app factory, fastify.listen on PORT from env
+	•	Add GET /health → { status: 'ok', uptime: process.uptime() }
+	•	Add GET /ready → checks db SELECT 1 + redis.ping(), returns 200 or 503
+	•	Verify: npm run dev → curl /health returns { status: 'ok' }
+
+PHASE 1 HANDOFF CHECKLIST — Run Before Notifying Person 2
+Every single item must pass before Person 2 starts Phase 5. Communicate completion in team channel.
+
+	•	docker compose up — all 5 services start green, zero restart loops
+	•	curl http://localhost:3000/health → 200 { status: 'ok' }
+	•	curl http://localhost:3000/ready → 200 { status: 'ready' }
+	•	npm run db:migrate → no errors, all 6 tables visible in psql
+	•	npm run db:seed → 2 lab rows in labs table
+	•	.env.example committed, no real secrets anywhere in git history
+	•	Person 2 clones fresh repo, runs npm install + docker compose up + db:migrate with ZERO manual steps
+
+PHASE 2 — Container Runtime & Orchestration
+ℹ  This is the hardest phase. Every bug here corrupts user sessions. Go slow, test each step manually.
+
+2.1  Docker API Wrapper — src/services/container.service.ts
+	•	Install: dockerode, @types/dockerode
+	•	Implement createContainer(config) — pulls image if not cached. Apply HostConfig:
+	•	  NanoCpus: CONTAINER_CPU_LIMIT × 1e9  (0.5 cores = 500000000)
+	•	  Memory: CONTAINER_MEMORY_LIMIT in bytes (512MB = 536870912)
+	•	  NetworkMode: CONTAINER_NETWORK env var. Never 'host'
+	•	  SecurityOpt: ['no-new-privileges:true']
+	•	  Labels: { 'com.labsystem': 'true', 'com.session_id': sessionId, 'com.user_id': userId }
+	•	Implement startContainer(id): start, return container ID
+	•	Implement stopContainer(id): SIGTERM → wait 10s → SIGKILL if still running
+	•	Implement removeContainer(id): force remove with force:true
+	•	Implement inspectContainer(id): return { running, ip, exitCode }
+	•	Implement getContainerStats(id): stream stats once, return { cpu_percent, memory_mb }
+	•	Implement execInContainer(id, cmd, timeoutMs): run command, return { stdout, stderr, exitCode }. Kill exec after timeout.
+	•	Implement listLabContainers(): filter by label com.labsystem=true
+	•	Wrap ALL dockerode calls in try/catch. Throw typed AppError with code CONTAINER_ERROR
+	•	Unit test: mock dockerode, verify NanoCpus and Memory set correctly in createContainer call
+
+2.2  Traefik Label Injection
+	•	In createContainer config, add Traefik labels alongside other labels:
+	•	  'traefik.enable': 'true'
+	•	  'traefik.http.routers.{sessionId}.rule': "Host(`{sessionId}.labs.yourdomain.com`)"
+	•	  'traefik.http.routers.{sessionId}.entrypoints': 'web'
+	•	  'traefik.http.services.{sessionId}.loadbalancer.server.port': '{expose_port}'
+	•	Verify: after container start, Traefik dashboard shows new router entry within 5s
+	•	Verify: HTTP GET http://{sessionId}.labs.yourdomain.com returns non-5xx
+	•	Verify: after container remove, Traefik router disappears within 5s (auto-deregistered via Docker events)
+
+2.3  Lab Docker Images
+	•	Create docker/lab-images/k8s-basics/Dockerfile:
+	•	  FROM ubuntu:22.04
+	•	  Install: kubectl, curl, bash, wget
+	•	  Download ttyd binary from GitHub releases (pin specific version)
+	•	  Create non-root user: useradd -m -u 1000 labuser
+	•	  USER 1000
+	•	  EXPOSE 7681
+	•	  ENTRYPOINT ["ttyd", "-p", "7681", "-W", "bash"]
+	•	Build: docker build -t lab-k8s-basics:latest docker/lab-images/k8s-basics/
+	•	Smoke test: docker run -p 7681:7681 lab-k8s-basics:latest, then curl http://localhost:7681 → returns ttyd HTML
+	•	WebSocket test: wscat -c ws://localhost:7681 → shell prompt appears
+
+2.4  BullMQ Jobs Setup
+	•	Install: bullmq
+	•	Create src/jobs/provision.job.ts — BullMQ Worker listening on queue 'provision'
+	•	  Job payload: { sessionId, labId, userId, dockerImage, initScript, exposePort }
+	•	  Step 1: call container.service.createContainer + startContainer
+	•	  Step 2: wait for container healthcheck (poll inspectContainer until running, max 60s)
+	•	  Step 3: call auth.service.issueEmbedToken(sessionId, userId) to get signed terminal token
+	•	  Step 4: build terminal_url: https://{sessionId}.labs.yourdomain.com/terminal?token={embedToken}
+	•	  Step 5: update DB session: status='ready', terminal_url, ready_at=NOW()
+	•	  Step 6: publish Redis event lab:{sessionId}:events → { type: 'session_ready', terminal_url }
+	•	  On any error: update DB session status='error', error_message. Remove container if it started.
+	•	  Set job timeout: 60s (failsafe — no hanging provisioning state)
+	•	Create src/jobs/cleanup.job.ts — BullMQ repeating job every CLEANUP_INTERVAL_MS
+	•	  Query DB: sessions WHERE expires_at < NOW() AND status NOT IN ('destroyed','expired')
+	•	  For each: call orchestrator.destroyLab(sessionId). Update status=expired.
+	•	Create src/jobs/monitor.job.ts — BullMQ repeating job every MONITOR_INTERVAL_MS
+	•	  For each active session: call container.service.getContainerStats
+	•	  Insert row into resource_snapshots table
+	•	  If cpu_percent > 90: publish resource_warning WebSocket event
+
+2.5  Lab Orchestrator — src/services/orchestrator.service.ts
+	•	Implement provisionLab(userId, labId, options):
+	•	  1. Count active sessions for user. Reject with QUOTA_EXCEEDED if >= MAX_ACTIVE_SESSIONS_PER_USER
+	•	  2. Check idempotency: if session status IN ('provisioning','ready') for user+lab → return existing
+	•	  3. Count ALL active containers. Reject with LAB_CAPACITY_FULL if >= MAX_TOTAL_ACTIVE_CONTAINERS
+	•	  4. INSERT session row: status='provisioning', expires_at=NOW()+DEFAULT_SESSION_TTL
+	•	  5. SET Redis: sess:{sessionId} = '1' EX DEFAULT_SESSION_TTL
+	•	  6. Enqueue provision.job to BullMQ with session payload
+	•	  7. Return session record immediately (async — do not await container start)
+	•	Implement destroyLab(sessionId):
+	•	  1. Load session from DB, verify not already destroyed
+	•	  2. Call container.service.stopContainer + removeContainer (handle not-found gracefully)
+	•	  3. DEL Redis key sess:{sessionId}
+	•	  4. UPDATE DB: status='destroyed', ended_at=NOW()
+	•	  5. Publish session_expired WebSocket event
+	•	Implement getSessionStatus(sessionId, userId): load from DB, verify ownership, return status + terminal_url
+
+2.6  Session Service — src/services/session.service.ts
+	•	Implement heartbeat(sessionId, userId): verify session in DB, SET Redis sess:{sessionId} EX DEFAULT_SESSION_TTL
+	•	Implement extendSession(sessionId, extendBySeconds): add time, cap at MAX_SESSION_TTL from created_at
+	•	  Update Redis TTL + DB expires_at in the same operation
+	•	  Reject if requested extension would exceed MAX_SESSION_TTL total
+
+PHASE 3 — Security, Monitoring & Deployment
+
+3.1  Container Security
+	•	Verify all lab containers have SecurityOpt: ['no-new-privileges:true']
+	•	Verify Docker socket NOT accessible from inside lab containers (no docker.sock mount in lab Dockerfile)
+	•	Verify lab containers on lab-network — cannot reach host metadata (curl http://169.254.169.254 must timeout)
+	•	Test: docker exec into running lab container, attempt sudo su — must fail
+	•	Test: attempt to access another container's IP from inside lab container — must be blocked
+
+3.2  Resource Monitoring Service — src/services/resource.service.ts
+	•	Implement getLiveStats(sessionId): call container.service.getContainerStats, return { cpu_percent, memory_mb }
+	•	Implement getAggregatedStats(sessionId): query resource_snapshots, return { avg_cpu, peak_memory_mb }
+	•	Implement checkCapacity(): count running containers vs MAX_TOTAL_ACTIVE_CONTAINERS
+	•	Write TS-05 tests (T55-T62): mock Docker stats stream, verify warning event fires at cpu > 90
+
+3.3  CI/CD — .github/workflows/ci.yml
+	•	Create ci.yml with jobs: test → build → deploy-staging
+	•	  Services: postgres:16 and redis:7 as GitHub Actions service containers
+	•	  Steps: checkout, setup-node 20, npm ci, db:migrate, test:ts01, test:ts02, test (all), build
+	•	  Deploy-staging: only on push to main — docker build + push + kubectl set image
+	•	Add branch protection rule: block merge if 'test' job fails
+	•	Add npm scripts: test:ts01 through test:ts06 running individual Vitest test files
+	•	Write TS-02 provisioning tests (T13-T30): mock dockerode for unit, use DinD for integration
+
+3.4  Kubernetes Manifests (prod)
+	•	k8s/api-deployment.yaml: 2 replicas, resource requests (250m CPU, 256Mi) + limits (500m, 512Mi)
+	•	  Add livenessProbe: GET /health, initialDelaySeconds 10
+	•	  Add readinessProbe: GET /ready
+	•	  Env vars from Secret: DATABASE_URL, REDIS_URL, JWT_SECRET via secretKeyRef
+	•	k8s/worker-deployment.yaml: 1 replica, same resource limits, runs dist/worker.js
+	•	k8s/postgres-statefulset.yaml: 1 replica, PersistentVolumeClaim 10Gi
+	•	k8s/redis-deployment.yaml: 1 replica with persistence
+	•	k8s/secrets.yaml: template only — no real values (use sealed-secrets in CI)
+	•	k8s/ingress-wildcard.yaml: wildcard *.labs.yourdomain.com → Traefik service
+
+
+Person 2
+Fullstack Developer + DevOps — Auth, APIs, WebSocket, Validation, Scheduling
+
+Your role is to make the system usable by humans and the frontend. You own every user-facing surface: auth, routes, WebSocket events, step validation, and scheduling. You depend on Person 1's infrastructure — do not start Phase 5 until they signal Phase 1 is done.
+
+⚠  Clone the repo. Run docker compose up. Run curl /health. Verify /ready returns 200. THEN start writing code. Never develop against a broken environment — you will waste hours chasing phantom bugs.
+
+PHASE 4 — Auth System  (Start in Parallel with Person 1's Phase 1)
+ℹ  Auth has zero dependency on Docker or containers. Start this immediately once the repo + DB schema exist.
+
+4.1  Auth Service — src/services/auth.service.ts
+	•	Install: jose, bcrypt, @types/bcrypt, zod
+	•	Implement hashPassword(plain): bcrypt.hash with 12 rounds
+	•	Implement verifyPassword(plain, hash): bcrypt.compare — returns boolean
+	•	Implement issueAccessToken(userId, role): sign JWT with HS256, exp=JWT_ACCESS_EXPIRES (15min)
+	•	  Payload: { sub: userId, role, type: 'access' }
+	•	Implement issueRefreshToken(userId): sign JWT, store token family ID in Redis SET with 7d TTL
+	•	  Payload: { sub: userId, family: randomUUID(), type: 'refresh' }
+	•	  Redis key: refresh:{userId}:{family} — store with EX JWT_REFRESH_EXPIRES
+	•	Implement issueEmbedToken(sessionId, userId): scoped JWT, exp=LAB_TOKEN_EXPIRES (10min)
+	•	  Payload: { sub: userId, session_id: sessionId, scope: 'embed', type: 'embed' }
+	•	Implement verifyToken(token): decode + verify, throw TOKEN_EXPIRED or UNAUTHORIZED AppError
+	•	Implement refreshTokens(refreshToken): verify, check family in Redis, invalidate old, issue new pair
+	•	  If family not in Redis (already rotated): revoke ALL families for user — possible replay attack
+	•	Implement revokeAllUserTokens(userId): delete all refresh:{userId}:* keys from Redis
+	•	Embed tokens REJECTED on all API endpoints — enforced in authenticate middleware by checking scope field
+	•	Never store access tokens in Redis — they are stateless, verified by signature only
+
+4.2  Auth Routes — src/routes/auth.routes.ts
+	•	Register with prefix /api/v1/auth
+	•	POST /login: Zod body { email: string, password: string }
+	•	  Load user by email from DB
+	•	  Call verifyPassword — return same 401 INVALID_CREDENTIALS whether email OR password wrong
+	•	  On success: issue access + refresh tokens, update user.last_login
+	•	POST /refresh: Zod body { refresh_token: string } → call refreshTokens
+	•	POST /logout: revoke all tokens for request.user.sub → 200
+	•	POST /register: Zod body { email, password, name } → hashPassword, INSERT user
+	•	Apply rate limit to /login: 5 requests per IP per 60s
+	•	Write TS-01 tests (T01-T12) in tests/ts-01-auth.test.ts
+	•	  Use fastify.inject() — no real HTTP calls needed
+	•	  Mock DB for unit tests. Use real postgres/redis in integration tests
+	•	  Test T11 cross-session embed token rejection explicitly
+
+4.3  Middleware — src/middleware/
+	•	Create authenticate.ts — Fastify preHandler hook:
+	•	  Extract 'Bearer {token}' from Authorization header
+	•	  Call auth.service.verifyToken
+	•	  Reject if token.scope === 'embed' (embed tokens forbidden on API routes)
+	•	  Set request.user = decoded payload
+	•	  On any failure: throw AppError UNAUTHORIZED or TOKEN_EXPIRED
+	•	Create ownerGuard.ts — Fastify preHandler hook:
+	•	  Read request.params.sessionId
+	•	  Query DB: SELECT user_id FROM sessions WHERE id = sessionId
+	•	  If session.user_id !== request.user.sub → throw AppError FORBIDDEN
+	•	Create errorHandler.ts — Fastify setErrorHandler:
+	•	  Map AppError.code to HTTP status codes (see error table in frontend doc)
+	•	  Never expose stack traces when NODE_ENV === 'production'
+	•	  Return { error: { code, message, http_status } } shape — matches frontend error handling
+
+PHASE 5 — All REST API Routes  (Start After Phase 1 Handoff)
+⚠  Do not start this phase until Person 1 confirms Phase 1 handoff checklist is done. Verify with curl /health yourself.
+
+5.1  Lab Routes — src/routes/labs.routes.ts
+	•	Register with prefix /api/v1/labs. Apply authenticate to all routes.
+	•	POST /provision: Zod { lab_id, course_id?, options? } → orchestrator.provisionLab → 202
+	•	GET /:sessionId/status: ownerGuard → orchestrator.getSessionStatus → 200
+	•	POST /:sessionId/heartbeat: ownerGuard → session.heartbeat → 200 { time_remaining_seconds }
+	•	POST /:sessionId/extend: ownerGuard + Zod { extend_by_seconds } → session.extendSession → 200
+	•	DELETE /:sessionId: ownerGuard → orchestrator.destroyLab → 200 { status: 'destroyed' }
+	•	GET /:sessionId/resources: ownerGuard → resource.getLiveStats → 200 { cpu_percent, memory_mb }
+	•	GET /:sessionId/progress: ownerGuard → query step_progress → 200 with steps array
+	•	POST /:sessionId/validate/:stepId: ownerGuard → validation.validateStep → 200
+	•	GET /sessions: list request.user's sessions, support ?status= query param
+	•	Apply Zod validation to ALL request bodies and query params — every single one
+	•	Apply ownerGuard to EVERY route with :sessionId — no exceptions
+
+5.2  Catalog Routes — src/routes/catalog.routes.ts
+	•	Register with prefix /api/v1/catalog. No auth required (public endpoints).
+	•	GET /labs: paginated list. Query params: page, limit, course_id, difficulty
+	•	GET /labs/:labId: single lab with full steps[] and resources[] from JSONB columns
+	•	Cache both endpoints in Redis with 5 minute TTL using lab catalog keys
+
+5.3  Schedule Routes — src/routes/schedule.routes.ts
+	•	Register with prefix /api/v1/schedule. Apply authenticate to all.
+	•	POST /: Zod { lab_id, slot_start: ISO8601, slot_end: ISO8601 } → scheduler.bookSlot → 201
+	•	  Validate slot_start > Date.now() before calling service
+	•	DELETE /:bookingId: verify ownership → scheduler.cancelBooking → 200
+	•	GET /slots: query { lab_id, date } → scheduler.getAvailableSlots → array of { slot_start, slot_end, available }
+	•	GET /my-bookings: list authenticated user's confirmed + queued bookings
+
+5.4  Admin Routes — src/routes/admin.routes.ts
+	•	Register with prefix /api/v1/admin. Apply authenticate + role guard (admin only).
+	•	GET /metrics?course_id=: aggregate resource stats from resource_snapshots — admin only
+	•	GET /sessions/active: list all sessions with status=ready across all users
+	•	DELETE /sessions/:sessionId: force destroy any session regardless of owner
+	•	Role guard: if request.user.role !== 'admin' → 403 FORBIDDEN
+
+PHASE 6 — WebSocket, Validation & Scheduling
+
+6.1  WebSocket Gateway — src/websocket/gateway.ts
+	•	Register WS route in Fastify: GET /ws/v1/labs/:sessionId/events
+	•	On WS connect: extract token from query param ?token= or Sec-WebSocket-Protocol header
+	•	  Call auth.service.verifyToken — disconnect with code 1008 if invalid
+	•	  Verify request.params.sessionId belongs to token.sub — disconnect with 1008 if not
+	•	  Subscribe redisSub to channel lab:{sessionId}:events
+	•	  On Redis message: ws.send(JSON.stringify(event))
+	•	On WS close: redisSub.unsubscribe('lab:{sessionId}:events')
+	•	On WS message from client: route by message.type to handler functions
+	•	  'heartbeat' message → call session.heartbeat → reply with heartbeat_ack event
+	•	Create shared util src/utils/publishEvent.ts:
+	•	  publishEvent(sessionId, type, payload): redisClient.publish('lab:{sessionId}:events', JSON.stringify({type,...payload}))
+	•	  This function is imported by ALL BullMQ jobs (Person 1 uses it too — coordinate on the signature)
+	•	Implement token refresh: schedule a delayed job 9min after embed token issue → issue new embed token → publishEvent token_refresh
+	•	Implement time_warning: when session Redis TTL drops below 300s → publishEvent time_warning { minutes_remaining: 5 }
+
+6.2  Step Validation Engine — src/services/validation.service.ts
+	•	Implement validateStep(sessionId, stepId, userId):
+	•	  1. Load session from DB. Verify status=ready. Verify user ownership.
+	•	  2. Load lab definition. Find step by stepId in steps JSONB array.
+	•	  3. If step not found → throw AppError STEP_NOT_FOUND
+	•	  4. Load container_id from session record (NEVER from request body)
+	•	  5. Call container.service.execInContainer(container_id, step.validation_cmd, 10000)
+	•	  6. exitCode === 0 → status='passed'. Non-zero → status='failed'
+	•	  7. db.insert/update step_progress: status, validated_at, increment attempts
+	•	  8. On passed: publishEvent(sessionId, 'step_passed', { step_id, next_step_id })
+	•	  9. Check if all steps passed → if yes: publish lab_completed, update session
+	•	  10. Return { status, message, hint (if failed), next_step_id }
+	•	On execInContainer timeout (10s): return 504, do NOT kill the user's session
+	•	Write TS-04 tests (T45-T54) in tests/ts-04-validation.test.ts
+	•	  Mock container.service.execInContainer for all unit tests
+	•	  Test T47: verify container_id always comes from DB, never from request
+	•	  Test T51: use vitest fake timers to trigger 10s timeout without actually waiting
+
+6.3  Scheduling Service — src/services/scheduler.service.ts
+	•	Implement bookSlot(userId, labId, slotStart, slotEnd):
+	•	  Overlap query: SELECT 1 FROM bookings WHERE lab_id=$1 AND status='confirmed' AND NOT (slot_end<=$2 OR slot_start>=$3)
+	•	  If overlap found → throw AppError SLOT_UNAVAILABLE
+	•	  INSERT booking row status='confirmed'
+	•	  Enqueue BullMQ delayed job: provision at slotStart - 2 minutes
+	•	  Enqueue BullMQ delayed job: send notification at slotStart - 15 minutes
+	•	Implement cancelBooking(bookingId, userId): verify ownership, SET status='cancelled', advance queue
+	•	Implement getAvailableSlots(labId, date): generate 1h slots for the day, mark each as available/taken
+	•	Implement queueBooking(userId, labId, slotStart): INSERT with status='queued', return queue position
+	•	Queue advance logic: on cancelBooking, query first queued booking for that slot, promote to confirmed, notify user
+	•	Write TS-06 tests (T63-T72) in tests/ts-06-schedule.test.ts
+	•	  Test overlap detection with simultaneous booking requests (use Promise.all to simulate race)
+
+6.4  Notification Service — src/services/notification.service.ts
+	•	Install: nodemailer, @types/nodemailer
+	•	Implement sendWebSocketNotification(userId, eventType, payload): publish to user's active WS channels via Redis
+	•	Implement sendEmailNotification(userId, template, data): create nodemailer transport from SMTP env vars
+	•	Email templates needed: booking_confirmed, booking_reminder, lab_expired, lab_completed
+	•	ALWAYS queue email sends via BullMQ — never block an HTTP request for email delivery
+	•	Write TS-03 lifecycle tests (T31-T44) in tests/ts-03-lifecycle.test.ts
+	•	  Use vitest fake timers for T33 (TTL expiry) — do not actually wait 3600s
+
+
+Shared Tasks — Both People
+
+Task
+Owner
+When
+Define AppError class + all error code constants
+Person 2 creates, Person 1 imports
+Before Phase 2
+Define src/types/ — shared TS types for sessions, events, API shapes
+Both discuss, Person 2 writes
+Before Phase 5
+publishEvent() utility — used by Person 1 jobs AND Person 2 WebSocket
+Person 2 writes, coordinate signature early
+Phase 4
+Code review: every PR reviewed by the other person
+Both, ongoing
+Ongoing
+Full 12-step E2E test (from frontend integration doc)
+Both together
+Final day
+Load test: 10 concurrent provisions
+Person 1 runs script
+Before submission
+README.md: full setup instructions from zero
+Both contribute
+Before submission
+
+Integration Checkpoints — Run Together
+
+⚠  These must be run with both people present. Integration bugs always surface here.
+
+Checkpoint 1 — After Phase 1 + Phase 4
+	•	docker compose up — all services healthy
+	•	TS-01 all 12 tests pass against live postgres/redis
+	•	Manual: POST /auth/login with real seeded user → receive JWT → hit GET /catalog/labs → 200
+
+Checkpoint 2 — After Phase 2 + Phase 5
+	•	Manual: POST /provision → poll /status until ready → terminal_url returned
+	•	WebSocket connect to terminal_url → shell prompt appears within 5s
+	•	POST /heartbeat → redis-cli TTL sess:{id} resets
+	•	All TS-02 provisioning tests pass
+
+Checkpoint 3 — All Phases Complete
+	•	All 72 validation tests pass (TS-01 through TS-06)
+	•	Full 12-step E2E test from backend plan Part A.8 — every step passes manually
+	•	10 concurrent provisions complete within 30s — no errors, no duplicate subdomains
+	•	Cross-session terminal access attempt returns 403
+	•	DELETE /labs/{id} → container gone from docker ps within 5s
+	•	After session expiry: progress rows still in DB with correct step statuses
+
