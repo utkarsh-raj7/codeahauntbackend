@@ -44,14 +44,17 @@ export const provisionWorker = new Worker('provision', async (job: Job) => {
 
         let terminal_url: string;
         const isDev = process.env.NODE_ENV !== 'production';
+        const publicHost = process.env.PUBLIC_HOST; // e.g. 136.113.181.196
 
-        if (isDev) {
-            // In dev, resolve the host port Docker assigned to ttyd
+        if (isDev || publicHost) {
+            // Dev or IP-based deployment: use host IP + dynamic port
             const inspectData = await containerService.inspectContainer(containerId);
             const portKey = `${exposePort || 7681}/tcp`;
             const hostPort = inspectData.ports?.[portKey]?.[0]?.HostPort || '7681';
-            terminal_url = `http://localhost:${hostPort}`;
+            const host = publicHost || 'localhost';
+            terminal_url = `http://${host}:${hostPort}`;
         } else {
+            // Domain-based deployment: use Traefik subdomain routing
             const baseDomain = process.env.BASE_DOMAIN || 'labs.yourdomain.com';
             terminal_url = `https://${sessionId}.${baseDomain}/terminal?token=${embedToken}`;
         }

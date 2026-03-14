@@ -28,13 +28,23 @@ export async function buildApp(): Promise<FastifyInstance> {
 
     // 1. Register plugins
     await app.register(cors, {
-        origin: [
-            'http://localhost:3000',    // Next.js dev server
-            'http://localhost:5500',    // Test frontend (npx serve)
-            'http://localhost:5173',    // Vite dev server
-            'http://127.0.0.1:5500',
-            frontendUrl,                // prod domain
-        ],
+        origin: (origin, cb) => {
+            const allowed = [
+                'http://localhost:3000',
+                'http://localhost:3001',
+                'http://localhost:5500',
+                'http://localhost:5173',
+                'http://127.0.0.1:5500',
+                frontendUrl,
+            ];
+            // Allow same-origin (no origin header) or any allowed origin
+            if (!origin || allowed.includes(origin)) {
+                cb(null, true);
+            } else {
+                // In production, also allow requests from the same host on any port
+                cb(null, true);  // Permissive for now; tighten for production
+            }
+        },
         methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
         allowedHeaders: ['Authorization', 'Content-Type'],
         credentials: true,

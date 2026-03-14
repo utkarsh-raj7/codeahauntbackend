@@ -1,130 +1,127 @@
-# CloudLab — Deployment Guide
+# CloudLab — GCP Deployment Guide
 
-## Requirements
-
-- A VPS with **2+ CPU cores**, **4GB+ RAM**, **40GB+ disk**
-- Docker 24+ and Docker Compose v2 installed
-- A domain name (optional but recommended)
-
-> **⚠ Why not Render/Railway?** This app provisions Docker containers for each lab session, requiring Docker socket access. PaaS platforms don't expose the Docker daemon. A VPS with Docker is required.
-
-## Recommended Providers
-
-| Provider | Plan | Cost |
-|----------|------|------|
-| DigitalOcean Droplet | 4GB RAM, 2 vCPU | $24/mo |
-| Hetzner Cloud | CX21 | €5.50/mo |
-| AWS EC2 | t3.medium | ~$30/mo |
+## Prerequisites
+- GCP VM with Docker (e2-standard-2 or better, Ubuntu 22.04)
+- Ports **80, 443, 3000, 32768-33000** open in GCP Firewall
 
 ---
 
-## Quick Deploy (5 minutes)
+## 1. GCP Firewall Setup
+
+Go to **VPC Network → Firewall** in GCP Console and create a rule:
+- **Name:** `allow-cloudlab`
+- **Target:** All instances (or your VM's network tag)
+- **Source IP:** `0.0.0.0/0`
+- **Protocols/Ports:** `tcp:80,443,3000,32768-33000`
+- Port range 32768-33000 is for lab terminal (ttyd) access
+
+---
+
+## 2. SSH into VM & Install Docker
 
 ```bash
-# 1. SSH into your VPS
-ssh root@your-server-ip
+ssh user@136.113.181.196
 
-# 2. Install Docker (if not installed)
+# Install Docker
 curl -fsSL https://get.docker.com | sh
-systemctl enable docker
+sudo usermod -aG docker $USER
+newgrp docker
 
-# 3. Clone and deploy
+# Verify
+docker --version
+docker compose version
+```
+
+---
+
+## 3. Clone & Deploy (One-Liner)
+
+```bash
 git clone https://github.com/utkarsh-raj7/codeahauntbackend.git /opt/cloudlab
 cd /opt/cloudlab
-chmod +x deploy.sh
-./deploy.sh
+sudo bash deploy.sh
 ```
 
-The deploy script will:
+The `deploy.sh` script will:
 1. ✅ Check Docker is installed
-2. ✅ Generate secure JWT + DB passwords
-3. ✅ Build the API (multi-stage, ~150MB image)
-4. ✅ Start Postgres, Redis, API, Worker, Nginx, Traefik
-5. ✅ Run database migrations + seed labs
-6. ✅ Build all 40 lab Docker images
-7. ✅ Print access URLs
+2. 📥 Clone or pull latest code
+3. 📝 Generate `.env.production` with random secrets
+4. 🔨 Build the API + Worker production images
+5. 🚀 Start all services (API, Worker, Postgres, Redis, Nginx, Traefik)
+6. 🗄️ Run database migrations & seed
+7. 🐳 Build all 40 lab Docker images
 
 ---
 
-## Manual Setup
+## 4. Manual Deploy (Step-by-Step)
 
-### 1. Configure Environment
 ```bash
 cd /opt/cloudlab
+
+# Create env file
 cp .env.production.example .env.production
-nano .env.production
-```
+nano .env.production  # Set PUBLIC_HOST=136.113.181.196
 
-Key settings to change:
-```env
-BASE_DOMAIN=labs.yourdomain.com    # Your domain
-POSTGRES_PASSWORD=<generated>       # Strong password
-JWT_SECRET=<generated>              # 64-char hex
-FIREBASE_PROJECT_ID=your-id         # Firebase creds
-MAX_ACTIVE_SESSIONS_PER_USER=3      # Per-user limit
-MAX_TOTAL_ACTIVE_CONTAINERS=50      # Server capacity
-```
+# Create network
+docker network create lab-network 2>/dev/null || true
 
-### 2. Start Services
-```bash
-docker compose -f docker-compose.prod.yml up -d
-```
+# Build & start
+docker compose -f docker-compose.prod.yml up -d --build
 
-### 3. Run Migrations
-```bash
+# Wait for API to be healthy
+curl http://localhost:3000/health
+
+# Run migrations
 docker compose -f docker-compose.prod.yml exec api npx drizzle-kit push
+
+# Seed data
 docker compose -f docker-compose.prod.yml exec api node dist/db/seed.js
 docker compose -f docker-compose.prod.yml exec api node dist/db/seed-labs.js
-```
 
-### 4. Build Lab Images
-```bash
+# Build lab images (takes ~10 minutes first time)
 for dir in docker/lab-images/*/; do
     name=$(basename "$dir")
+    echo "Building lab-${name}..."
     docker build -q -t "lab-${name}:latest" "$dir"
 done
 ```
 
 ---
 
-## SSL with Let's Encrypt
+## 5. Verify
 
 ```bash
-# Install certbot
-apt install certbot -y
+# Check services
+docker compose -f docker-compose.prod.yml ps
 
-# Get certificate
-certbot certonly --standalone -d yourdomain.com
+# Check API health
+curl http://136.113.181.196:3000/health    # should return {"status":"ok"}
+curl http://136.113.181.196/health         # via nginx
+curl http://136.113.181.196/api/v1/catalog/labs?limit=5  # lab catalog
 
-# Copy certs for Nginx
-cp /etc/letsencrypt/live/yourdomain.com/fullchain.pem nginx/certs/
-cp /etc/letsencrypt/live/yourdomain.com/privkey.pem nginx/certs/
-
-# Restart Nginx
-docker compose -f docker-compose.prod.yml restart nginx
+# Open frontend
+# Browser: http://136.113.181.196
 ```
 
 ---
 
-## Operations
+## 6. Common Operations
 
 ```bash
 # View logs
 docker compose -f docker-compose.prod.yml logs -f api worker
 
-# Restart everything
+# Restart
 docker compose -f docker-compose.prod.yml restart
 
-# Stop everything
+# Stop
 docker compose -f docker-compose.prod.yml down
 
 # Update code
-git pull origin main
-docker compose -f docker-compose.prod.yml up -d --build
+cd /opt/cloudlab && git pull && docker compose -f docker-compose.prod.yml up -d --build
 
-# Check health
-curl http://localhost:3000/health
-curl http://localhost:3000/ready
+# Rebuild a single lab image
+docker build -t lab-linux-shell-basics:latest docker/lab-images/linux-shell-basics/
 ```
 
 ---
@@ -132,39 +129,22 @@ curl http://localhost:3000/ready
 ## Architecture
 
 ```
-                  ┌─────────────────────────────────┐
-                  │           Nginx (:80/:443)       │
-                  │   Frontend static files           │
-                  │   /api/* → API server              │
-                  └──────┬──────────────────────────┘
-                         │
-              ┌──────────┼──────────┐
-              │          │          │
-        ┌─────▼─────┐   │   ┌──────▼──────┐
-        │ API (:3000)│   │   │   Worker     │
-        │ Fastify    │   │   │ BullMQ jobs  │
-        └─────┬──────┘   │   └──────┬───────┘
-              │          │          │
-        ┌─────▼──────────▼──────────▼───────┐
-        │    Docker Socket (/var/run/...)    │
-        │                                    │
-        │   ┌────────┐ ┌────────┐ ┌──────┐  │
-        │   │Lab Pod1│ │Lab Pod2│ │Lab..N│  │
-        │   └────────┘ └────────┘ └──────┘  │
-        └───────────────────────────────────┘
-              │          │
-        ┌─────▼───┐  ┌──▼────┐
-        │Postgres │  │ Redis │
-        └─────────┘  └───────┘
+Internet → GCP VM (136.113.181.196)
+           ├── :80  → Nginx (frontend + /api proxy)
+           ├── :3000 → Fastify API (direct)
+           ├── :8080 → Traefik dashboard
+           └── :32768-33000 → ttyd terminals (one per lab session)
+               ↑
+           Docker containers (lab-linux-shell-basics, lab-db-postgres-basics, etc.)
 ```
 
-## Resource Planning
+## Environment Variables
 
-| Lab Containers | RAM Needed | CPU Needed |
-|----------------|-----------|------------|
-| 5 concurrent   | 4 GB      | 2 cores    |
-| 10 concurrent  | 8 GB      | 4 cores    |
-| 25 concurrent  | 16 GB     | 8 cores    |
-| 50 concurrent  | 32 GB     | 16 cores   |
-
-Each lab container uses ~512MB RAM and 0.5 CPU by default (configurable via `CONTAINER_MEMORY_LIMIT` and `CONTAINER_CPU_LIMIT`).
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `PUBLIC_HOST` | **Yes** | VM's public IP (e.g. `136.113.181.196`) |
+| `POSTGRES_PASSWORD` | Yes | Database password |
+| `JWT_SECRET` | Yes | JWT signing secret (auto-generated by deploy.sh) |
+| `MAX_ACTIVE_SESSIONS_PER_USER` | No | Default: 3 |
+| `MAX_TOTAL_ACTIVE_CONTAINERS` | No | Default: 20 |
+| `KEEP_RECENT_SESSIONS` | No | Default: 3 (auto-prune) |

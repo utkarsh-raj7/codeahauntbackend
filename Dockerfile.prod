@@ -16,9 +16,10 @@ FROM node:20-alpine AS runner
 
 WORKDIR /app
 
-# Install only prod deps
+# Install prod deps + drizzle-kit for migrations
 COPY package*.json ./
-RUN npm ci --omit=dev --ignore-scripts
+RUN npm ci --omit=dev --ignore-scripts && \
+    npm install drizzle-kit tsx --save-optional
 
 # Copy compiled JS
 COPY --from=builder /app/dist/ ./dist/
@@ -26,6 +27,7 @@ COPY --from=builder /app/dist/ ./dist/
 # Copy runtime assets
 COPY drizzle/ ./drizzle/
 COPY public/ ./public/
+COPY drizzle.config.ts ./
 
 # Non-root user
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
