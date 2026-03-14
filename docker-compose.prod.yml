@@ -28,10 +28,10 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 15s
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
     networks:
       - internal
       - lab-network
@@ -114,7 +114,7 @@ services:
       - ./nginx/certs:/etc/nginx/certs:ro
     depends_on:
       api:
-        condition: service_healthy
+        condition: service_started
     networks:
       - internal
       - lab-network

@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install ttyd
-RUN wget https://github.com/tsl0922/ttyd/releases/download/1.7.4/ttyd.${ARCH} \
+RUN ARCH=$(uname -m) && wget https://github.com/tsl0922/ttyd/releases/download/1.7.4/ttyd.${ARCH} \
     && chmod +x ttyd.${ARCH} \
     && mv ttyd.${ARCH} /usr/local/bin/ttyd
 
