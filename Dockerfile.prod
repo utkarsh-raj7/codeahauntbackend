@@ -16,10 +16,11 @@ FROM node:20-alpine AS runner
 
 WORKDIR /app
 
-# Install prod deps + drizzle-kit/tsx for migrations
+# Install prod deps + drizzle-kit/tsx for migrations + Docker CLI
 COPY package*.json ./
 RUN npm ci --omit=dev --ignore-scripts && \
-    npm install drizzle-kit tsx --save-optional
+    npm install drizzle-kit tsx --save-optional && \
+    apk add --no-cache docker-cli
 
 # Copy compiled JS + config
 COPY --from=builder /app/dist/ ./dist/
@@ -29,9 +30,11 @@ COPY src/db/ ./src/db/
 # Copy runtime assets
 COPY public/ ./public/
 
-# Non-root user
-RUN addgroup -S appgroup && adduser -S appuser -G appgroup
-USER appuser
+# Note: Running as root because this container needs Docker socket access
+# to create/manage lab containers. Security is maintained via:
+# - Resource limits (CPU/memory per container)
+# - Network isolation (lab-network)
+# - Session TTLs and auto-cleanup
 
 ENV NODE_ENV=production
 EXPOSE 3000
