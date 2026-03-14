@@ -6,11 +6,13 @@ services:
       dockerfile: Dockerfile.prod
     container_name: cloudlab-api
     restart: unless-stopped
+    user: "root"
+    privileged: true
     ports:
       - "${PORT:-3000}:3000"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - lab-data:/app/lab-data
+      - ./lab-data:/app/lab-data
     environment:
       - NODE_ENV=production
       - PORT=3000
@@ -43,10 +45,12 @@ services:
       dockerfile: Dockerfile.prod
     container_name: cloudlab-worker
     restart: unless-stopped
+    user: "root"
+    privileged: true
     command: ["node", "dist/jobs/index.js"]
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - lab-data:/app/lab-data
+      - ./lab-data:/app/lab-data
     environment:
       - NODE_ENV=production
       - DATABASE_URL=postgresql://${POSTGRES_USER:-labuser}:${POSTGRES_PASSWORD:-labpass}@postgres:5432/${POSTGRES_DB:-labdb}
@@ -141,7 +145,6 @@ services:
 volumes:
   pgdata:
   redisdata:
-  lab-data:
 
 networks:
   internal:
