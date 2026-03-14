@@ -7,8 +7,8 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci --ignore-scripts
 COPY tsconfig.json ./
+COPY drizzle.config.ts ./
 COPY src/ ./src/
-COPY drizzle/ ./drizzle/
 RUN npx tsc --outDir dist
 
 # ──────────────────────────────────────────────
@@ -16,18 +16,18 @@ FROM node:20-alpine AS runner
 
 WORKDIR /app
 
-# Install prod deps + drizzle-kit for migrations
+# Install prod deps + drizzle-kit/tsx for migrations
 COPY package*.json ./
 RUN npm ci --omit=dev --ignore-scripts && \
     npm install drizzle-kit tsx --save-optional
 
-# Copy compiled JS
+# Copy compiled JS + config
 COPY --from=builder /app/dist/ ./dist/
+COPY drizzle.config.ts ./
+COPY src/db/ ./src/db/
 
 # Copy runtime assets
-COPY drizzle/ ./drizzle/
 COPY public/ ./public/
-COPY drizzle.config.ts ./
 
 # Non-root user
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup

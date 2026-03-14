@@ -66,14 +66,11 @@ done
 
 # ─── 7. Run migrations & seed ───
 echo "🗄  Running database migrations..."
-docker compose -f "$COMPOSE_FILE" exec api node -e "
-const { execSync } = require('child_process');
-try { execSync('npx drizzle-kit push', { stdio: 'inherit', cwd: '/app' }); } catch(e) { console.warn('Migration warning:', e.message); }
-"
+docker compose -f "$COMPOSE_FILE" exec -T api npx drizzle-kit push --config=drizzle.config.ts 2>&1 || echo "  ⚠  Migration warning (may already be applied)"
 
 echo "🌱 Seeding database..."
-docker compose -f "$COMPOSE_FILE" exec api node dist/db/seed.js 2>/dev/null || echo "  (seed may already exist)"
-docker compose -f "$COMPOSE_FILE" exec api node dist/db/seed-labs.js 2>/dev/null || echo "  (labs may already exist)"
+docker compose -f "$COMPOSE_FILE" exec -T api node dist/db/seed.js 2>/dev/null || echo "  (seed user may already exist)"
+docker compose -f "$COMPOSE_FILE" exec -T api node dist/db/seed-labs.js 2>/dev/null || echo "  (labs may already exist)"
 
 # ─── 8. Build lab images ───
 echo "🐳 Building lab Docker images..."
