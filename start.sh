@@ -47,13 +47,29 @@ fi
 echo -e "${GREEN}✅ PostgreSQL:${NC} labdb accessible"
 
 # ─── 4. Check Redis ───
-if ! redis-cli ping > /dev/null 2>&1; then
-    echo -e "${RED}❌ Redis not running!${NC}"
-    echo "   Option A: docker compose -f docker/docker-compose.dev.yml up -d redis"
-    echo "   Option B: brew services start redis"
-    exit 1
+REDIS_OK=false
+if redis-cli ping > /dev/null 2>&1; then
+    REDIS_OK=true
+elif lsof -i :6379 > /dev/null 2>&1; then
+    REDIS_OK=true
 fi
-echo -e "${GREEN}✅ Redis:${NC} connected"
+
+if [ "$REDIS_OK" = false ]; then
+    echo -e "${YELLOW}🔄 Starting Redis via Docker...${NC}"
+    DOCKER_HOST="unix://$DOCKER_SOCKET" docker rm -f lab-redis 2>/dev/null || true
+    DOCKER_HOST="unix://$DOCKER_SOCKET" docker run -d --name lab-redis \
+        -p 6379:6379 redis:7-alpine redis-server --notify-keyspace-events KEA > /dev/null 2>&1
+    sleep 2
+    if lsof -i :6379 > /dev/null 2>&1; then
+        echo -e "${GREEN}✅ Redis:${NC} started via Docker"
+    else
+        echo -e "${RED}❌ Could not start Redis!${NC}"
+        echo "   Try manually: brew services start redis"
+        exit 1
+    fi
+else
+    echo -e "${GREEN}✅ Redis:${NC} connected"
+fi
 
 # ─── 5. Create Docker network ───
 DOCKER_HOST="unix://$DOCKER_SOCKET" docker network create lab-network 2>/dev/null && \
