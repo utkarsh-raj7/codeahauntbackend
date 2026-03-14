@@ -504,6 +504,102 @@
         ::-webkit-scrollbar-thumb:hover {
             background: var(--border-hover);
         }
+
+        /* ─── Guide Panel ─── */
+        .guide-panel {
+            display: none;
+            max-height: 260px;
+            overflow-y: auto;
+            border-bottom: 1px solid var(--border);
+            background: linear-gradient(180deg, rgba(59, 130, 246, 0.04), var(--bg-secondary));
+            padding: 16px 20px;
+        }
+
+        .guide-panel.open {
+            display: block;
+        }
+
+        .guide-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+
+        .guide-header h3 {
+            font-size: 14px;
+            font-weight: 700;
+            color: var(--accent-blue);
+        }
+
+        .guide-desc {
+            font-size: 12px;
+            color: var(--text-secondary);
+            line-height: 1.6;
+            margin-bottom: 12px;
+            padding: 8px 12px;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 8px;
+            border-left: 3px solid var(--accent-blue);
+        }
+
+        .guide-steps {
+            list-style: none;
+            counter-reset: step;
+        }
+
+        .guide-step {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            padding: 8px 12px;
+            border-radius: 8px;
+            margin-bottom: 4px;
+            transition: background 0.15s;
+        }
+
+        .guide-step:hover {
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .step-num {
+            min-width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--text-muted);
+        }
+
+        .step-content h4 {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .step-content p {
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-top: 2px;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .guide-toggle {
+            font-size: 11px;
+            padding: 4px 10px;
+            border-radius: 4px;
+        }
+
+        .guide-toggle.active {
+            background: rgba(59, 130, 246, 0.15);
+            border-color: rgba(59, 130, 246, 0.3);
+            color: var(--accent-blue);
+        }
     </style>
 </head>
 
@@ -533,11 +629,15 @@
             <div class="terminal-header">
                 <span class="terminal-title" id="terminalTitle">No lab selected</span>
                 <div class="terminal-actions">
+                    <button id="guideBtn" class="guide-toggle" onclick="toggleGuide()" style="display:none">📖
+                        Guide</button>
                     <button id="launchBtn" class="primary" disabled onclick="provision()">▶ Launch</button>
                     <button id="heartbeatBtn" disabled onclick="heartbeat()">♥</button>
                     <button id="destroyBtn" class="danger" disabled onclick="destroy()">✕ End</button>
                 </div>
             </div>
+
+            <div id="guidePanel" class="guide-panel"></div>
 
             <div id="placeholder" class="placeholder">
                 <div class="placeholder-icon">🖥</div>
@@ -655,15 +755,69 @@
     `).join('');
         }
 
-        function selectLab(id) {
+        async function selectLab(id) {
             selectedLab = allLabs.find(l => l.id === id);
             if (!selectedLab) return;
 
             document.getElementById('terminalTitle').textContent = `${CAT_ICONS[selectedLab.category] || '📦'} ${selectedLab.title}`;
             document.getElementById('launchBtn').disabled = false;
+            document.getElementById('guideBtn').style.display = 'inline-flex';
 
-            renderLabs(); // refresh selection highlight
+            // Fetch full lab details (with steps)
+            try {
+                const res = await fetch(`${API}/catalog/labs/${id}`);
+                const full = await res.json();
+                selectedLab = { ...selectedLab, ...full };
+                renderGuide();
+            } catch (e) { console.warn('Could not load lab details'); }
+
+            renderLabs();
             log(`Selected: ${selectedLab.title}`);
+        }
+
+        function toggleGuide() {
+            const panel = document.getElementById('guidePanel');
+            const btn = document.getElementById('guideBtn');
+            panel.classList.toggle('open');
+            btn.classList.toggle('active');
+        }
+
+        function renderGuide() {
+            const panel = document.getElementById('guidePanel');
+            if (!selectedLab) { panel.innerHTML = ''; return; }
+
+            const steps = selectedLab.steps || [];
+            const resources = selectedLab.resources || [];
+            const tags = selectedLab.tags || [];
+
+            panel.innerHTML = `
+                <div class="guide-header">
+                    <h3>${CAT_ICONS[selectedLab.category] || '📦'} ${selectedLab.title}</h3>
+                    <span class="lab-tag diff-${selectedLab.difficulty}" style="margin-left:auto">${selectedLab.difficulty}</span>
+                </div>
+                <div class="guide-desc">
+                    ${selectedLab.description || 'No description'}
+                    ${tags.length ? '<br><br><strong>Topics:</strong> ' + tags.map(t => `<code>#${t}</code>`).join(' ') : ''}
+                </div>
+                ${steps.length ? `
+                <h4 style="font-size:12px;color:var(--text-secondary);margin-bottom:6px">📋 Exercises</h4>
+                <ol class="guide-steps">
+                    ${steps.map((s, i) => `
+                        <li class="guide-step">
+                            <span class="step-num">${i + 1}</span>
+                            <div class="step-content">
+                                <h4>${s.name || s.title || 'Step ' + (i + 1)}</h4>
+                                ${s.validation_cmd ? `<p>$ ${s.validation_cmd}</p>` : ''}
+                            </div>
+                        </li>
+                    `).join('')}
+                </ol>` : '<p style="font-size:12px;color:var(--text-muted)">Open terminal and type <code>cat ~/GUIDE.md</code> for instructions</p>'}
+                ${resources.length ? `<p style="font-size:11px;color:var(--text-muted);margin-top:8px">📚 ${resources.map(r => `<a href="${r}" target="_blank" style="color:var(--accent-blue)">${r.split('/').pop()}</a>`).join(' · ')}</p>` : ''}
+            `;
+
+            // Auto-open guide when lab is selected
+            panel.classList.add('open');
+            document.getElementById('guideBtn').classList.add('active');
         }
 
         async function provision() {
