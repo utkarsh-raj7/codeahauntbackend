@@ -1,6 +1,6 @@
 import { containerService } from './container.service';
 import { db } from '../config/database';
-import { resources } from '../db/schema/resources';
+import { resourceSnapshots } from '../db/schema/resources';
 import { eq, sql } from 'drizzle-orm';
 import { AppError } from '../types';
 
@@ -24,8 +24,8 @@ export class ResourceService {
                 avg_cpu: sql<number>`avg(cpu_percent)::numeric(5,2)`,
                 peak_memory_mb: sql<number>`max(memory_mb)::numeric(10,2)`
             })
-            .from(resources)
-            .where(eq(resources.sessionId, sessionId));
+            .from(resourceSnapshots)
+            .where(eq(resourceSnapshots.sessionId, sessionId));
 
         if (!result.length || result[0].avg_cpu === null) {
             return { avg_cpu: 0, peak_memory_mb: 0 };
