@@ -234,6 +234,27 @@ async function seedLabs() {
 
         // ═══ CATEGORY 4 — KUBERNETES ═══
         {
+            id: 'k8s-basics-01',
+            title: 'Kubernetes Basics 01',
+            description: 'Learn the fundamentals of Kubernetes pod creation and deployment.',
+            difficulty: 'beginner',
+            category: 'kubernetes',
+            dockerImage: 'lab-k8s-basics:latest',
+            estimatedMinutes: 45,
+            ttlSeconds: 3600,
+            cpuLimit: 1.0,
+            memoryLimitMb: 1024,
+            exposePort: 7681,
+            isActive: true,
+            tags: ['k8s', 'beginner'],
+            steps: [
+                { id: 'step-1', name: 'Check kubectl version', validation_cmd: 'kubectl version --client' },
+                { id: 'step-2', name: 'Read a Pod manifest', validation_cmd: 'cat ~/exercises/01-pod.yaml' },
+                { id: 'step-3', name: 'Dry-run a Pod', validation_cmd: 'kubectl apply -f ~/exercises/01-pod.yaml --dry-run=client -o yaml' },
+            ],
+            resources: [],
+        },
+        {
             id: 'k8s-kubectl-basics',
             title: 'kubectl Essentials',
             description: 'Navigate a Kubernetes cluster with kubectl: get, describe, logs, exec.',
@@ -248,8 +269,11 @@ async function seedLabs() {
             isActive: true,
             tags: ['k8s', 'kubectl', 'beginner'],
             steps: [
-                { id: 'step-1', name: 'Get cluster nodes', validation_cmd: 'kubectl get nodes' },
-                { id: 'step-2', name: 'List all namespaces', validation_cmd: 'kubectl get namespaces' },
+                { id: 'step-1', name: 'Check kubectl version', validation_cmd: 'kubectl version --client' },
+                { id: 'step-2', name: 'Read a Pod manifest', validation_cmd: 'cat ~/exercises/01-pod.yaml' },
+                { id: 'step-3', name: 'Generate YAML from CLI', validation_cmd: 'kubectl run test --image=nginx --dry-run=client -o yaml' },
+                { id: 'step-4', name: 'Explore API resources', validation_cmd: 'kubectl api-resources | head -20' },
+                { id: 'step-5', name: 'Create a Deployment', validation_cmd: 'kubectl create deployment test --image=nginx --replicas=3 --dry-run=client -o yaml' },
             ],
             resources: [],
         },
@@ -268,8 +292,9 @@ async function seedLabs() {
             isActive: true,
             tags: ['k8s', 'deployments', 'rolling-update'],
             steps: [
-                { id: 'step-1', name: 'Apply deployment', validation_cmd: 'kubectl get deployment nginx-deployment' },
-                { id: 'step-2', name: 'Scale to 3 replicas', validation_cmd: 'kubectl get deployment nginx-deployment -o jsonpath="{.spec.replicas}" | grep 3' },
+                { id: 'step-1', name: 'Read the Deployment YAML', validation_cmd: 'cat ~/exercises/01-deployment.yaml' },
+                { id: 'step-2', name: 'Dry-run the Deployment', validation_cmd: 'kubectl apply -f ~/exercises/01-deployment.yaml --dry-run=client -o yaml' },
+                { id: 'step-3', name: 'Generate from CLI', validation_cmd: 'kubectl create deployment test --image=redis --replicas=2 --dry-run=client -o yaml' },
             ],
             resources: [],
         },
@@ -288,7 +313,9 @@ async function seedLabs() {
             isActive: true,
             tags: ['k8s', 'services', 'networking'],
             steps: [
-                { id: 'step-1', name: 'Expose with ClusterIP', validation_cmd: 'kubectl get svc web' },
+                { id: 'step-1', name: 'Read ClusterIP Service', validation_cmd: 'cat ~/exercises/01-clusterip.yaml' },
+                { id: 'step-2', name: 'Dry-run the Service', validation_cmd: 'kubectl apply -f ~/exercises/01-clusterip.yaml --dry-run=client -o yaml' },
+                { id: 'step-3', name: 'Create NodePort from CLI', validation_cmd: 'kubectl create service nodeport test --tcp=80:80 --dry-run=client -o yaml' },
             ],
             resources: [],
         },
@@ -307,8 +334,9 @@ async function seedLabs() {
             isActive: true,
             tags: ['k8s', 'configmap', 'secrets'],
             steps: [
-                { id: 'step-1', name: 'Create ConfigMap', validation_cmd: 'kubectl get configmap' },
-                { id: 'step-2', name: 'Create Secret', validation_cmd: 'kubectl get secret' },
+                { id: 'step-1', name: 'Read the ConfigMap', validation_cmd: 'cat ~/exercises/01-configmap.yaml' },
+                { id: 'step-2', name: 'Create a Secret from CLI', validation_cmd: 'kubectl create secret generic test --from-literal=pass=s3cur3 --dry-run=client -o yaml' },
+                { id: 'step-3', name: 'Pod with ConfigMap + Secret', validation_cmd: 'kubectl apply -f ~/exercises/03-pod-with-config.yaml --dry-run=client -o yaml' },
             ],
             resources: [],
         },
@@ -766,7 +794,19 @@ async function seedLabs() {
         },
     ];
 
-    await db.insert(labs).values(allLabs).onConflictDoNothing();
+    // Upsert — re-running seed updates steps instead of silently skipping
+    for (const lab of allLabs) {
+        await db.insert(labs).values(lab).onConflictDoUpdate({
+            target: labs.id,
+            set: {
+                steps: lab.steps as any,
+                title: lab.title,
+                description: lab.description,
+                tags: lab.tags,
+                dockerImage: lab.dockerImage,
+            },
+        });
+    }
 
     console.log(`✅ Seeded ${allLabs.length} labs across ${new Set(allLabs.map(l => l.category)).size} categories`);
     console.log('\nCategories:');

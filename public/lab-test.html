@@ -589,6 +589,25 @@
             font-family: 'JetBrains Mono', monospace;
         }
 
+        .step-cmd {
+            display: block;
+            font-size: 11px;
+            color: #a5f3fc;
+            background: rgba(0,0,0,0.3);
+            padding: 4px 8px;
+            margin-top: 4px;
+            border-radius: 4px;
+            border: 1px solid transparent;
+            cursor: pointer;
+            font-family: 'JetBrains Mono', monospace;
+            transition: border-color 0.3s;
+            word-break: break-all;
+        }
+        .step-cmd:hover {
+            background: rgba(0,0,0,0.5);
+            border-color: rgba(59,130,246,0.3);
+        }
+
         .guide-toggle {
             font-size: 11px;
             padding: 4px 10px;
@@ -651,7 +670,8 @@
     </div>
 
     <script>
-        const API = 'http://localhost:3001/api/v1';
+        const IS_DEV = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+        const API = IS_DEV ? 'http://localhost:3001/api/v1' : '/api/v1';
         let token = null;
         let sessionId = null;
         let pollTimer = null;
@@ -807,7 +827,7 @@
                             <span class="step-num">${i + 1}</span>
                             <div class="step-content">
                                 <h4>${s.name || s.title || 'Step ' + (i + 1)}</h4>
-                                ${s.validation_cmd ? `<p>$ ${s.validation_cmd}</p>` : ''}
+                                ${s.validation_cmd ? `<code class="step-cmd" title="Click to copy" onclick="navigator.clipboard.writeText(this.textContent);this.style.borderColor='#4ade80';setTimeout(()=>this.style.borderColor='',800)">${s.validation_cmd}</code>` : ''}
                             </div>
                         </li>
                     `).join('')}
