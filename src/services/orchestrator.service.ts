@@ -119,6 +119,7 @@ export class OrchestratorService {
                 await db.update(sessions)
                     .set({ status: 'destroyed', endedAt: new Date() })
                     .where(eq(sessions.id, session.id));
+                containerService.removeSessionVolume(session.id);
                 console.log(`[auto-prune] Destroyed session ${session.id.slice(0, 8)} (lab: ${session.labId})`);
             } catch (err: any) {
                 console.warn(`[auto-prune] Failed to prune ${session.id.slice(0, 8)}:`, err.message);
@@ -152,6 +153,9 @@ export class OrchestratorService {
             .where(eq(sessions.id, sessionId));
 
         await publishEvent(sessionId, 'session_expired', {});
+
+        // Auto-clean volume directory
+        containerService.removeSessionVolume(sessionId);
 
         return { status: 'destroyed' };
     }

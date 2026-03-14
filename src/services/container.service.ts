@@ -1,6 +1,7 @@
 import Docker from 'dockerode';
-import { existsSync } from 'fs';
-import { homedir } from 'os';
+import { existsSync, mkdirSync, rmSync } from 'fs';
+import { homedir, tmpdir } from 'os';
+import { join } from 'path';
 import { AppError } from '../types';
 
 function getDockerSocket(): string {
@@ -11,6 +12,10 @@ function getDockerSocket(): string {
 }
 
 const docker = new Docker({ socketPath: getDockerSocket() });
+
+// Session volume directory — stores user work files, auto-cleaned on destroy
+const LAB_DATA_ROOT = process.env.LAB_DATA_DIR || join(homedir(), 'lab-data');
+if (!existsSync(LAB_DATA_ROOT)) mkdirSync(LAB_DATA_ROOT, { recursive: true });
 
 export interface ContainerConfig {
     sessionId: string;
@@ -39,6 +44,10 @@ export class ContainerService {
             const baseDomain = process.env.BASE_DOMAIN || 'labs.yourdomain.com';
             const exposePort = config.exposePort || 7681;
 
+            // Create per-session volume directory
+            const volumePath = join(LAB_DATA_ROOT, config.sessionId);
+            mkdirSync(volumePath, { recursive: true });
+
             const container = await docker.createContainer({
                 Image: config.image,
                 name: `lab-${config.sessionId}`,
@@ -47,15 +56,18 @@ export class ContainerService {
                     NanoCpus: cpuLimit,
                     Memory: memoryLimit,
                     NetworkMode: networkMode,
-                    SecurityOpt: ['no-new-privileges:true'],
                     PortBindings: {
                         [`${exposePort}/tcp`]: [{ HostPort: '0' }]  // random host port
                     },
+                    Binds: [
+                        `${volumePath}:/home/labuser/downloads:rw`
+                    ],
                 },
                 Labels: {
                     'com.labsystem': 'true',
                     'com.session_id': config.sessionId,
                     'com.user_id': config.userId,
+                    'com.volume_path': volumePath,
 
                     // Phase 2.2: Traefik Label Injection
                     'traefik.enable': 'true',
@@ -189,6 +201,24 @@ export class ContainerService {
             return containers;
         } catch (err: any) {
             throw new AppError('CONTAINER_ERROR', `Failed to list lab containers: ${err.message}`, 500);
+        }
+    }
+
+    /** Get the host-side volume path for a session */
+    getSessionVolumePath(sessionId: string): string {
+        return join(LAB_DATA_ROOT, sessionId);
+    }
+
+    /** Remove the session volume directory (auto-cleanup) */
+    removeSessionVolume(sessionId: string) {
+        const volumePath = this.getSessionVolumePath(sessionId);
+        try {
+            if (existsSync(volumePath)) {
+                rmSync(volumePath, { recursive: true, force: true });
+                console.log(`[volume] Cleaned up ${volumePath}`);
+            }
+        } catch (err: any) {
+            console.warn(`[volume] Failed to clean ${volumePath}:`, err.message);
         }
     }
 }

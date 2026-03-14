@@ -102,6 +102,50 @@ const labsRoutes: FastifyPluginAsync = async (app) => {
             totalCount: labSteps.length,
         });
     });
+
+    // 10. List files in the session's downloads folder
+    app.get('/:sessionId/files', { preHandler: [authenticate, ownerGuard] }, async (request, reply) => {
+        const { sessionId } = request.params as { sessionId: string };
+        const { containerService } = await import('../services/container.service');
+        const volumePath = containerService.getSessionVolumePath(sessionId);
+
+        const { existsSync, readdirSync, statSync } = await import('fs');
+        const { join } = await import('path');
+
+        if (!existsSync(volumePath)) {
+            return reply.code(200).send({ files: [], hint: 'Save files to ~/downloads inside the lab to see them here.' });
+        }
+
+        const files = readdirSync(volumePath).map(name => {
+            const stat = statSync(join(volumePath, name));
+            return { name, size: stat.size, isDirectory: stat.isDirectory(), modified: stat.mtime };
+        });
+
+        return reply.code(200).send({ files, volumePath });
+    });
+
+    // 11. Download a file from the session's downloads folder
+    app.get('/:sessionId/files/:filename', { preHandler: [authenticate, ownerGuard] }, async (request, reply) => {
+        const { sessionId, filename } = request.params as { sessionId: string; filename: string };
+        const { containerService } = await import('../services/container.service');
+        const volumePath = containerService.getSessionVolumePath(sessionId);
+
+        const { existsSync, createReadStream } = await import('fs');
+        const { join, basename } = await import('path');
+
+        // Security: prevent path traversal
+        const safeName = basename(filename);
+        const filePath = join(volumePath, safeName);
+
+        if (!existsSync(filePath)) {
+            return reply.code(404).send({ error: { code: 'FILE_NOT_FOUND', message: `File '${safeName}' not found in downloads`, http_status: 404 } });
+        }
+
+        reply.header('Content-Disposition', `attachment; filename="${safeName}"`);
+        reply.header('Content-Type', 'application/octet-stream');
+        return reply.send(createReadStream(filePath));
+    });
 };
 
 export default labsRoutes;
+

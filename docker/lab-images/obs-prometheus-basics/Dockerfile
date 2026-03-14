@@ -2,9 +2,11 @@ FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y curl bash nano python3 \
     && rm -rf /var/lib/apt/lists/*
-RUN curl -fsSL https://github.com/prometheus/prometheus/releases/download/v2.50.1/prometheus-2.50.1.linux-amd64.tar.gz \
-    | tar xz -C /opt/ && ln -s /opt/prometheus-2.50.1.linux-amd64 /opt/prometheus
-RUN curl -fsSL https://github.com/tsl0922/ttyd/releases/download/1.7.4/ttyd.aarch64 \
+RUN ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/') && \
+    curl -fsSL https://github.com/prometheus/prometheus/releases/download/v2.50.1/prometheus-2.50.1.linux-${ARCH}.tar.gz \
+    | tar xz -C /opt/ && ln -s /opt/prometheus-2.50.1.linux-${ARCH} /opt/prometheus
+RUN ARCH=$(uname -m) && \
+    curl -fsSL https://github.com/tsl0922/ttyd/releases/download/1.7.4/ttyd.${ARCH} \
     -o /usr/local/bin/ttyd && chmod +x /usr/local/bin/ttyd
 RUN useradd -m -u 1000 -s /bin/bash labuser
 COPY prometheus.yml /etc/prometheus/prometheus.yml
