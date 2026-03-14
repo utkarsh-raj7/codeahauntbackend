@@ -43,20 +43,22 @@ export const provisionWorker = new Worker('provision', async (job: Job) => {
         const embedToken = await authService.issueEmbedToken(sessionId, userId);
 
         let terminal_url: string;
-        const isDev = process.env.NODE_ENV !== 'production';
-        const publicHost = process.env.PUBLIC_HOST; // e.g. 136.113.181.196
+        const publicHost = process.env.PUBLIC_HOST || ''; // e.g. 136.113.181.196
 
-        if (isDev || publicHost) {
-            // Dev or IP-based deployment: use host IP + dynamic port
-            const inspectData = await containerService.inspectContainer(containerId);
-            const portKey = `${exposePort || 7681}/tcp`;
-            const hostPort = inspectData.ports?.[portKey]?.[0]?.HostPort || '7681';
-            const host = publicHost || 'localhost';
-            terminal_url = `http://${host}:${hostPort}`;
+        // Always use direct IP+port approach for terminal access
+        const inspectData = await containerService.inspectContainer(containerId);
+        const portKey = `${port}/tcp`;
+        const hostPort = inspectData.ports?.[portKey]?.[0]?.HostPort || '7681';
+
+        if (publicHost) {
+            terminal_url = `http://${publicHost}:${hostPort}`;
+        } else if (process.env.NODE_ENV !== 'production') {
+            terminal_url = `http://localhost:${hostPort}`;
         } else {
-            // Domain-based deployment: use Traefik subdomain routing
-            const baseDomain = process.env.BASE_DOMAIN || 'labs.yourdomain.com';
-            terminal_url = `https://${sessionId}.${baseDomain}/terminal?token=${embedToken}`;
+            // Production without PUBLIC_HOST — use container's host IP
+            const os = await import('os');
+            const hostname = os.hostname();
+            terminal_url = `http://${hostname}:${hostPort}`;
         }
 
         await db.update(sessions)
