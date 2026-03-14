@@ -99,15 +99,17 @@ export class OrchestratorService {
             )
         );
 
-        if (activeSessions.length <= KEEP_RECENT) return; // nothing to prune
+        if (activeSessions.length < KEEP_RECENT) return; // nothing to prune
 
         // Sort newest-first by createdAt
         activeSessions.sort((a, b) =>
             new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
         );
 
-        const toPrune = activeSessions.slice(KEEP_RECENT);
-        console.log(`[auto-prune] User ${userId.slice(0, 8)}: pruning ${toPrune.length} old session(s), keeping ${KEEP_RECENT}`);
+        // Keep KEEP_RECENT - 1 to leave room for the new session being provisioned
+        const keepCount = Math.max(KEEP_RECENT - 1, 0);
+        const toPrune = activeSessions.slice(keepCount);
+        console.log(`[auto-prune] User ${userId.slice(0, 8)}: pruning ${toPrune.length} old session(s), keeping ${keepCount}`);
 
         for (const session of toPrune) {
             try {
