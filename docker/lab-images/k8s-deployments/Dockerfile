@@ -10,7 +10,6 @@ RUN ARCH=$(uname -m) && \
     -o /usr/local/bin/ttyd && chmod +x /usr/local/bin/ttyd
 RUN useradd -m -u 1000 -s /bin/bash labuser \
     && echo "labuser ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
-COPY manifests/ /home/labuser/manifests/
 COPY init.sh /usr/local/bin/lab-init.sh
 RUN chmod +x /usr/local/bin/lab-init.sh
 USER labuser
